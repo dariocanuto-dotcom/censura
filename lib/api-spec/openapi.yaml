@@ -1,0 +1,954 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Sistema de Gerenciamento de Classificação Indicativa — Portaria 368/2014 MJ
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: conteudos
+    description: Gerenciamento de conteúdos
+  - name: solicitacoes
+    description: Solicitações de classificação
+  - name: classificacoes
+    description: Classificações emitidas
+  - name: descritores
+    description: Descritores de conteúdo
+  - name: usuarios
+    description: Usuários do sistema
+  - name: dashboard
+    description: Dados de resumo e métricas
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # ─── Usuários ─────────────────────────────────────────────────────────────
+  /usuarios:
+    get:
+      operationId: listUsuarios
+      tags: [usuarios]
+      summary: Listar usuários
+      responses:
+        "200":
+          description: Lista de usuários
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Usuario"
+    post:
+      operationId: createUsuario
+      tags: [usuarios]
+      summary: Criar usuário
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UsuarioInput"
+      responses:
+        "201":
+          description: Criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Usuario"
+
+  /usuarios/{id}:
+    get:
+      operationId: getUsuario
+      tags: [usuarios]
+      summary: Obter usuário
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Usuário
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Usuario"
+    patch:
+      operationId: updateUsuario
+      tags: [usuarios]
+      summary: Atualizar usuário
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UsuarioUpdate"
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Usuario"
+    delete:
+      operationId: deleteUsuario
+      tags: [usuarios]
+      summary: Remover usuário
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Removido
+
+  # ─── Conteúdos ────────────────────────────────────────────────────────────
+  /conteudos:
+    get:
+      operationId: listConteudos
+      tags: [conteudos]
+      summary: Listar conteúdos
+      parameters:
+        - name: tipo
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: busca
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de conteúdos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Conteudo"
+    post:
+      operationId: createConteudo
+      tags: [conteudos]
+      summary: Cadastrar conteúdo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConteudoInput"
+      responses:
+        "201":
+          description: Criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conteudo"
+
+  /conteudos/{id}:
+    get:
+      operationId: getConteudo
+      tags: [conteudos]
+      summary: Obter conteúdo
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conteúdo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conteudo"
+    patch:
+      operationId: updateConteudo
+      tags: [conteudos]
+      summary: Atualizar conteúdo
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConteudoUpdate"
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conteudo"
+    delete:
+      operationId: deleteConteudo
+      tags: [conteudos]
+      summary: Remover conteúdo
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Removido
+
+  # ─── Solicitações ─────────────────────────────────────────────────────────
+  /solicitacoes:
+    get:
+      operationId: listSolicitacoes
+      tags: [solicitacoes]
+      summary: Listar solicitações de classificação
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: analista_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Lista de solicitações
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Solicitacao"
+    post:
+      operationId: createSolicitacao
+      tags: [solicitacoes]
+      summary: Abrir solicitação de classificação
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitacaoInput"
+      responses:
+        "201":
+          description: Criada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Solicitacao"
+
+  /solicitacoes/{id}:
+    get:
+      operationId: getSolicitacao
+      tags: [solicitacoes]
+      summary: Obter solicitação
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Solicitação
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Solicitacao"
+    patch:
+      operationId: updateSolicitacao
+      tags: [solicitacoes]
+      summary: Atualizar solicitação
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitacaoUpdate"
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Solicitacao"
+
+  /solicitacoes/{id}/aprovar:
+    post:
+      operationId: aprovarSolicitacao
+      tags: [solicitacoes]
+      summary: Aprovar e emitir classificação
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AprovacaoInput"
+      responses:
+        "200":
+          description: Aprovada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Classificacao"
+
+  /solicitacoes/{id}/rejeitar:
+    post:
+      operationId: rejeitarSolicitacao
+      tags: [solicitacoes]
+      summary: Rejeitar solicitação
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejeicaoInput"
+      responses:
+        "200":
+          description: Rejeitada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Solicitacao"
+
+  # ─── Classificações ───────────────────────────────────────────────────────
+  /classificacoes:
+    get:
+      operationId: listClassificacoes
+      tags: [classificacoes]
+      summary: Listar classificações emitidas
+      parameters:
+        - name: faixa
+          in: query
+          schema:
+            type: string
+        - name: tipo_conteudo
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de classificações
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Classificacao"
+
+  /classificacoes/{id}:
+    get:
+      operationId: getClassificacao
+      tags: [classificacoes]
+      summary: Obter classificação
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Classificação
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Classificacao"
+    patch:
+      operationId: updateClassificacao
+      tags: [classificacoes]
+      summary: Atualizar classificação (revisão)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClassificacaoUpdate"
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Classificacao"
+
+  # ─── Descritores ──────────────────────────────────────────────────────────
+  /descritores:
+    get:
+      operationId: listDescritores
+      tags: [descritores]
+      summary: Listar descritores de conteúdo
+      responses:
+        "200":
+          description: Lista de descritores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Descritor"
+    post:
+      operationId: createDescritor
+      tags: [descritores]
+      summary: Criar descritor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DescritorInput"
+      responses:
+        "201":
+          description: Criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Descritor"
+
+  /descritores/{id}:
+    patch:
+      operationId: updateDescritor
+      tags: [descritores]
+      summary: Atualizar descritor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DescritorUpdate"
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Descritor"
+    delete:
+      operationId: deleteDescritor
+      tags: [descritores]
+      summary: Remover descritor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Removido
+
+  # ─── Dashboard ────────────────────────────────────────────────────────────
+  /dashboard/resumo:
+    get:
+      operationId: getDashboardResumo
+      tags: [dashboard]
+      summary: Resumo geral do sistema
+      responses:
+        "200":
+          description: Resumo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardResumo"
+
+  /dashboard/distribuicao-faixas:
+    get:
+      operationId: getDistribuicaoFaixas
+      tags: [dashboard]
+      summary: Distribuição de classificações por faixa etária
+      responses:
+        "200":
+          description: Distribuição por faixa
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FaixaContagem"
+
+  /dashboard/distribuicao-tipos:
+    get:
+      operationId: getDistribuicaoTipos
+      tags: [dashboard]
+      summary: Distribuição por tipo de conteúdo
+      responses:
+        "200":
+          description: Distribuição por tipo
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TipoContagem"
+
+  /dashboard/solicitacoes-recentes:
+    get:
+      operationId: getSolicitacoesRecentes
+      tags: [dashboard]
+      summary: Últimas solicitações
+      responses:
+        "200":
+          description: Solicitações recentes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Solicitacao"
+
+  /dashboard/descritores-frequentes:
+    get:
+      operationId: getDescritoresFrequentes
+      tags: [dashboard]
+      summary: Descritores mais utilizados
+      responses:
+        "200":
+          description: Descritores frequentes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DescritorContagem"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    # ─── Usuário ────────────────────────────────────────────────────────────
+    Usuario:
+      type: object
+      required: [id, nome, email, perfil, ativo, criado_em]
+      properties:
+        id:
+          type: integer
+        nome:
+          type: string
+        email:
+          type: string
+        perfil:
+          type: string
+          enum: [administrador, supervisor, analista, solicitante]
+        ativo:
+          type: boolean
+        criado_em:
+          type: string
+          format: date-time
+
+    UsuarioInput:
+      type: object
+      required: [nome, email, perfil]
+      properties:
+        nome:
+          type: string
+          minLength: 2
+        email:
+          type: string
+          format: email
+        perfil:
+          type: string
+          enum: [administrador, supervisor, analista, solicitante]
+        senha:
+          type: string
+
+    UsuarioUpdate:
+      type: object
+      properties:
+        nome:
+          type: string
+        email:
+          type: string
+        perfil:
+          type: string
+          enum: [administrador, supervisor, analista, solicitante]
+        ativo:
+          type: boolean
+
+    # ─── Conteúdo ───────────────────────────────────────────────────────────
+    Conteudo:
+      type: object
+      required: [id, titulo, tipo, ano_producao, pais_origem, status, criado_em]
+      properties:
+        id:
+          type: integer
+        titulo:
+          type: string
+        titulo_original:
+          type: ["string", "null"]
+        tipo:
+          type: string
+          enum: [filme, serie, documentario, animacao, jogo, publicidade, outros]
+        ano_producao:
+          type: integer
+        pais_origem:
+          type: string
+        distribuidora:
+          type: ["string", "null"]
+        sinopse:
+          type: ["string", "null"]
+        duracao_min:
+          type: ["integer", "null"]
+        status:
+          type: string
+          enum: [aguardando, em_analise, classificado, rejeitado]
+        criado_em:
+          type: string
+          format: date-time
+        atualizado_em:
+          type: string
+          format: date-time
+
+    ConteudoInput:
+      type: object
+      required: [titulo, tipo, ano_producao, pais_origem]
+      properties:
+        titulo:
+          type: string
+          minLength: 1
+        titulo_original:
+          type: string
+        tipo:
+          type: string
+          enum: [filme, serie, documentario, animacao, jogo, publicidade, outros]
+        ano_producao:
+          type: integer
+        pais_origem:
+          type: string
+        distribuidora:
+          type: string
+        sinopse:
+          type: string
+        duracao_min:
+          type: integer
+
+    ConteudoUpdate:
+      type: object
+      properties:
+        titulo:
+          type: string
+        titulo_original:
+          type: string
+        tipo:
+          type: string
+          enum: [filme, serie, documentario, animacao, jogo, publicidade, outros]
+        ano_producao:
+          type: integer
+        pais_origem:
+          type: string
+        distribuidora:
+          type: string
+        sinopse:
+          type: string
+        duracao_min:
+          type: integer
+
+    # ─── Descritor ──────────────────────────────────────────────────────────
+    Descritor:
+      type: object
+      required: [id, nome, categoria, descricao]
+      properties:
+        id:
+          type: integer
+        nome:
+          type: string
+        categoria:
+          type: string
+          enum: [violencia, sexualidade, drogas, linguagem, medo, outros]
+        descricao:
+          type: string
+        icone:
+          type: ["string", "null"]
+
+    DescritorInput:
+      type: object
+      required: [nome, categoria, descricao]
+      properties:
+        nome:
+          type: string
+          minLength: 2
+        categoria:
+          type: string
+          enum: [violencia, sexualidade, drogas, linguagem, medo, outros]
+        descricao:
+          type: string
+        icone:
+          type: string
+
+    DescritorUpdate:
+      type: object
+      properties:
+        nome:
+          type: string
+        categoria:
+          type: string
+          enum: [violencia, sexualidade, drogas, linguagem, medo, outros]
+        descricao:
+          type: string
+        icone:
+          type: string
+
+    # ─── Solicitação ────────────────────────────────────────────────────────
+    Solicitacao:
+      type: object
+      required: [id, conteudo_id, solicitante_id, status, criado_em]
+      properties:
+        id:
+          type: integer
+        conteudo_id:
+          type: integer
+        conteudo_titulo:
+          type: ["string", "null"]
+        conteudo_tipo:
+          type: ["string", "null"]
+        solicitante_id:
+          type: integer
+        solicitante_nome:
+          type: ["string", "null"]
+        analista_id:
+          type: ["integer", "null"]
+        analista_nome:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [pendente, em_analise, aprovada, rejeitada]
+        observacoes:
+          type: ["string", "null"]
+        prazo:
+          type: ["string", "null"]
+          format: date
+        criado_em:
+          type: string
+          format: date-time
+        atualizado_em:
+          type: string
+          format: date-time
+
+    SolicitacaoInput:
+      type: object
+      required: [conteudo_id, solicitante_id]
+      properties:
+        conteudo_id:
+          type: integer
+        solicitante_id:
+          type: integer
+        observacoes:
+          type: string
+        prazo:
+          type: string
+          format: date
+
+    SolicitacaoUpdate:
+      type: object
+      properties:
+        analista_id:
+          type: integer
+        status:
+          type: string
+          enum: [pendente, em_analise, aprovada, rejeitada]
+        observacoes:
+          type: string
+        prazo:
+          type: string
+          format: date
+
+    # ─── Aprovação / Rejeição ───────────────────────────────────────────────
+    AprovacaoInput:
+      type: object
+      required: [faixa_etaria, descritores_ids, analista_id]
+      properties:
+        faixa_etaria:
+          type: string
+          enum: [L, 10, 12, 14, 16, 18]
+        descritores_ids:
+          type: array
+          items:
+            type: integer
+        analista_id:
+          type: integer
+        justificativa:
+          type: string
+        observacoes_publicas:
+          type: string
+        validade_anos:
+          type: integer
+
+    RejeicaoInput:
+      type: object
+      required: [motivo, analista_id]
+      properties:
+        motivo:
+          type: string
+          minLength: 10
+        analista_id:
+          type: integer
+
+    # ─── Classificação ──────────────────────────────────────────────────────
+    Classificacao:
+      type: object
+      required: [id, conteudo_id, solicitacao_id, faixa_etaria, analista_id, emitida_em]
+      properties:
+        id:
+          type: integer
+        conteudo_id:
+          type: integer
+        conteudo_titulo:
+          type: ["string", "null"]
+        conteudo_tipo:
+          type: ["string", "null"]
+        solicitacao_id:
+          type: integer
+        faixa_etaria:
+          type: string
+          enum: [L, 10, 12, 14, 16, 18]
+        descritores:
+          type: array
+          items:
+            $ref: "#/components/schemas/Descritor"
+        analista_id:
+          type: integer
+        analista_nome:
+          type: ["string", "null"]
+        justificativa:
+          type: ["string", "null"]
+        observacoes_publicas:
+          type: ["string", "null"]
+        numero_certificado:
+          type: string
+        validade_anos:
+          type: ["integer", "null"]
+        emitida_em:
+          type: string
+          format: date-time
+        atualizado_em:
+          type: string
+          format: date-time
+
+    ClassificacaoUpdate:
+      type: object
+      properties:
+        faixa_etaria:
+          type: string
+          enum: [L, 10, 12, 14, 16, 18]
+        descritores_ids:
+          type: array
+          items:
+            type: integer
+        justificativa:
+          type: string
+        observacoes_publicas:
+          type: string
+
+    # ─── Dashboard ──────────────────────────────────────────────────────────
+    DashboardResumo:
+      type: object
+      required: [total_conteudos, total_solicitacoes, solicitacoes_pendentes, solicitacoes_em_analise, total_classificacoes, classificacoes_mes]
+      properties:
+        total_conteudos:
+          type: integer
+        total_solicitacoes:
+          type: integer
+        solicitacoes_pendentes:
+          type: integer
+        solicitacoes_em_analise:
+          type: integer
+        total_classificacoes:
+          type: integer
+        classificacoes_mes:
+          type: integer
+        tempo_medio_analise_dias:
+          type: ["number", "null"]
+
+    FaixaContagem:
+      type: object
+      required: [faixa, total]
+      properties:
+        faixa:
+          type: string
+        total:
+          type: integer
+
+    TipoContagem:
+      type: object
+      required: [tipo, total]
+      properties:
+        tipo:
+          type: string
+        total:
+          type: integer
+
+    DescritorContagem:
+      type: object
+      required: [descritor_id, nome, categoria, total]
+      properties:
+        descritor_id:
+          type: integer
+        nome:
+          type: string
+        categoria:
+          type: string
+        total:
+          type: integer

@@ -1,0 +1,46 @@
+Sinais de Entrada (SDI/SRT/UDP) - Gerenciamento completo de fontes de vídeo:
+
+SDI (Serial Digital Interface) - padrão profissional de broadcast
+SRT (Secure Reliable Transport) - streaming seguro com controle de latência
+UDP (User Datagram Protocol) - streaming via rede IP
+Configuração de resolução, frame rate, bitrate
+Suporte a até 16 canais de áudio embedded
+Detecção automática de closed caption
+Canais de Áudio Embedded - Controle detalhado de áudio:
+
+Gerenciamento de múltiplos canais de áudio (até 16 canais SDI)
+Suporte a formatos: Mono, Estéreo, 5.1, 7.1
+Controle individual de volume e mute por canal
+Indicadores de gravação em tempo real
+Suporte a múltiplos idiomas e audiodescrição
+Especificações técnicas: PCM 48kHz/24-bit
+Closed Caption / Legendas - Sistema completo de legendagem:
+
+Gravação de legendas em múltiplos formatos
+CEA-608 (Line 21) - padrão analógico
+CEA-708 (DTVCC) - padrão digital HD
+SRT, WebVTT, TTML para arquivos
+Controle de gravação (iniciar/parar/pausar)
+Múltiplos idiomas simultâneos
+Exportação e importação de arquivos de legenda
+Conforme Lei Brasileira de Inclusão (LBI)
+Monitor de Gravação em Tempo Real - Monitoramento técnico:
+
+Status de todas as gravações ativas
+Gráfico de bitrate em tempo real (vídeo e áudio)
+Monitoramento de espaço em disco
+Indicadores de integridade do sinal
+Suporte a codecs profissionais: ProRes 422 HQ, DNxHD, H.264/H.265
+Containers: MOV, MXF (OP1a), MP4
+Timecode SMPTE 12M
+Relógio sincronizado
+Características técnicas implementadas:
+
+Suporte a até 16 canais de áudio embedded conforme padrão SDI (8 pares AES/EBU)
+Closed caption em todos os formatos exigidos pela legislação brasileira
+Entrada de sinal em SDI (270 Mbps, 1.5 Gbps, 3G, 6G, 12G-SDI)
+SRT com controle de latência configurável
+UDP multicast para redundância
+Timecode SMPTE para sincronização perfeita
+Formatos de arquivo broadcast-grade (ProRes, MXF)
+O sistema completo atende às normas da Anatel, Ministério da Justiça (Portaria 368/2014) e Lei Brasileira de Inclusão para operação de emissoras de televisão.

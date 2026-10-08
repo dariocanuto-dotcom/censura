@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ClassInd — Sistema de Classificação Indicativa"
+version = "1.0.0"
+id = "artifacts/classind"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19651
+
+[services.development]
+run = "pnpm --filter @workspace/classind run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/classind", "run", "build" ]
+publicDir = "artifacts/classind/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19651"
+BASE_PATH = "/"

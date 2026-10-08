@@ -1,0 +1,1 @@
+- [Transporte SRT e ARIB](srt-transport-quirks.md) — mantenha uma conexão SRT por emissora e trate arib_caption como codec de legenda, não encoder.

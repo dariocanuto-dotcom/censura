@@ -1,0 +1,11 @@
+DC CENSURA PRO — Código-fonte
+
+Este arquivo contém o workspace pnpm do monitor ClassInd, da API e dos artefatos relacionados. Dependências instaladas, builds, caches, histórico Git e arquivos de credenciais foram excluídos.
+
+Para restaurar as dependências: pnpm install
+
+No Replit, importe este código como projeto para manter a configuração de artefatos e os workflows. Os workflows dos artefatos fornecem PORT e BASE_PATH.
+
+A API usa variáveis de ambiente como DATABASE_URL e SESSION_SECRET; configure os valores necessários em Secrets no ambiente de execução. Nenhum valor de segredo está neste ZIP.
+
+A reprodução e análise SRT/ARIB dependem do FFmpeg compilado com suporte SRT e libaribcaption/libaribb24.
