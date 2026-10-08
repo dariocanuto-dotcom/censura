@@ -1,3 +1,4 @@
+import { MonitorWorkspace } from "@/components/monitor-workspace";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import {
@@ -499,6 +500,37 @@ function BtsTables({ source, epgEvents, epgLoading, epgError, onReadEpg }: {
 
 // ─── Recording Blocks ─────────────────────────────────────────────────────────
 
+function LocalHardwarePanel({ path = "", onPath, disabled = false, tunersOnly = false }: {
+  path?: string; onPath?: (path: string) => void; disabled?: boolean; tunersOnly?: boolean;
+}) {
+  const [hardware, setHardware] = useState<{ drives: { DeviceID: string; VolumeName: string; FreeSpace: number }[]; tuners: { Name: string; DeviceID: string; Status: string }[] } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const scan = async () => {
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/api/dispositivos/local-hardware");
+      const data = await response.json();
+      if (!response.ok || data.erro) throw new Error(data.erro);
+      setHardware(data);
+    } catch (err) { setError(err instanceof Error ? err.message : "Falha ao localizar dispositivos"); }
+    finally { setLoading(false); }
+  };
+  return <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg p-3 space-y-2">
+    <div className="flex justify-between gap-2"><span className="text-xs text-gray-300">{tunersOnly ? "Placas de TV digital aberta" : "HD e pasta das gravações"}</span>
+      <button disabled={loading || disabled} onClick={scan} className="text-xs text-teal-400 disabled:opacity-40">{loading ? "Buscando…" : tunersOnly ? "Localizar placas" : "Localizar HDs"}</button></div>
+    {!tunersOnly && <>
+      {hardware && <select aria-label="HD das gravações" disabled={disabled} value="" onChange={e => onPath?.(`${e.target.value}\\DC-Censura\\Gravacoes`)} className="bg-[#1a1f2e] text-xs w-full rounded p-2">
+        <option value="">Selecione o HD</option>{hardware.drives.map(d => <option key={d.DeviceID} value={d.DeviceID}>{d.DeviceID} {d.VolumeName} · {(d.FreeSpace / 1073741824).toFixed(1)} GB livres</option>)}
+      </select>}
+      <Input aria-label="Pasta das gravações" disabled={disabled} placeholder="D:\\DC-Censura\\Gravacoes" value={path} onChange={e => onPath?.(e.target.value)} className="bg-[#1a1f2e] text-xs"/>
+      <p className="text-[10px] text-gray-500">Gravação no computador da API, em blocos MPEG-TS de 10 minutos, preservando vídeo, áudio e legenda do sinal.</p>
+    </>}
+    {tunersOnly && hardware && <>{hardware.tuners.length ? hardware.tuners.map(t => <div key={t.DeviceID} className="text-xs text-gray-300">{t.Name} · {t.Status}</div>) : <p className="text-xs text-gray-500">Nenhuma placa de TV digital foi identificada nos drivers Windows.</p>}<p className="text-[10px] text-gray-500">A sintonia ISDB-T depende do driver BDA/SDK da placa. A detecção não inicia a recepção RF.</p></>}
+    {error && <p className="text-xs text-red-400">{error}</p>}
+  </div>;
+}
+
 function RecordingBlocks({ blocks, currentSec, recording, codec }: { blocks:RecordingBlock[]; currentSec:number; recording:boolean; codec:string }) {
   const progress=(currentSec/BLOCK_SEC)*100;
   return (
@@ -824,6 +856,7 @@ function EntradasDialog({ open, onOpenChange, sources, onSave }: {
           </DialogTitle>
         </DialogHeader>
 
+        <LocalHardwarePanel tunersOnly/>
         {editing ? (
           /* ─── Edit form ─── */
           <div>
@@ -926,7 +959,7 @@ function SettingsDialog({ open, onOpenChange, config, onChange, sourceName }: {
           </Sec>
           <Sec title="Gravação Contínua">
             <Row label="Duração do Bloco"><div className="flex items-center gap-2"><Input value="10" disabled className="bg-[#111] border-[#2a3050] text-gray-500 h-8 text-xs w-16"/><span className="text-xs text-gray-500">minutos (padrão broadcast)</span></div></Row>
-            <Row label="Caminho de Saída"><Input value={draft.outputPath} onChange={e=>u("outputPath",e.target.value)} className={iCls} data-testid="settings-output"/></Row>
+            <LocalHardwarePanel path={draft.outputPath} onPath={path=>u("outputPath",path)}/>
           </Sec>
           <Sec title="Notificações de Falha">
             <div className="flex flex-col gap-2 mb-2">
@@ -1312,7 +1345,7 @@ export default function MonitorAoVivo() {
   const [entradasOpen, setEntradasOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [srtTestOpen, setSrtTestOpen] = useState(false);
-  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<Config>(() => ({ ...DEFAULT_CONFIG, outputPath: localStorage.getItem("dccp-recording-path") ?? "" }));
 
   const source = sources[Math.min(sourceIdx, sources.length - 1)] ?? sources[0];
   const fps = source ? srcFps(source) : 29.97;
@@ -1325,7 +1358,7 @@ export default function MonitorAoVivo() {
 
   const [timecode, setTimecode] = useState("");
   const [clock, setClock] = useState("");
-  const [scopeTab, setScopeTab] = useState<ScopeTab>("waveform");
+  const [scopeTab, setScopeTab] = useState<ScopeTab>("bts");
   const [scopeTick, setScopeTick] = useState(0);
   const [recBlink, setRecBlink] = useState(true);
 
@@ -1338,7 +1371,8 @@ export default function MonitorAoVivo() {
   const [audioLevels, setAudioLevels] = useState<number[]>(Array(8).fill(-60));
   const [peakLevels, setPeakLevels] = useState<number[]>(Array(8).fill(-60));
   const [loudnessDb, setLoudnessDb] = useState<number | null>(null);
-  const [loudnessEnabled, setLoudnessEnabled] = useState(true);
+  const [loudnessEnabled, setLoudnessEnabled] = useState(() => localStorage.getItem("dccp-loudness-enabled") === "true");
+  useEffect(() => { localStorage.setItem("dccp-loudness-enabled", String(loudnessEnabled)); }, [loudnessEnabled]);
   const [loudnessPeakDb, setLoudnessPeakDb] = useState<number | null>(null);
   const [btsReportOpen, setBtsReportOpen] = useState(false);
   const [btsSaving, setBtsSaving] = useState(false);
@@ -1348,6 +1382,7 @@ export default function MonitorAoVivo() {
   // ── ARIB B24 CC ──────────────────────────────────────────────────────────────
   const [aribLoading, setAribLoading] = useState(false);
   const [aribLinhas, setAribLinhas] = useState<string[]>([]);
+  const captionHistory = useRef<string[]>([]);
   const [aribErro, setAribErro] = useState<string | null>(null);
   const [aribTemCC, setAribTemCC] = useState(false);
   const [aribEstado, setAribEstado] = useState<AribEstado | null>(null);
@@ -1536,6 +1571,7 @@ export default function MonitorAoVivo() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...currentSource.srt,
+            ...(recording ? { recordingDirectory: config.outputPath } : {}),
             captureMetadata: currentSource.srt.host === "45.176.168.146",
             ...(srtProgramBySource[currentSource.id] !== undefined
               ? { programId: srtProgramBySource[currentSource.id] }
@@ -1579,7 +1615,7 @@ export default function MonitorAoVivo() {
           .catch(() => undefined);
       }
     };
-  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, signalActive, srtBridgeNonce, srtProgramBySource]);
+  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, signalActive, srtBridgeNonce, srtProgramBySource, recording, config.outputPath]);
 
   const srtChannel = srtProbe?.canal;
   const srtVideoStream = srtProbe?.streams.find(stream => stream.tipo === "video" && srtChannel?.streams?.includes(stream.index))
@@ -1612,6 +1648,7 @@ export default function MonitorAoVivo() {
               clearTimeout(clearCaptionTimer);
               clearCaptionTimer = setTimeout(() => { if (!cancelled) setAribLinhas([]); }, 2000);
               const lines: string[] = data.linhas;
+              captionHistory.current = [...captionHistory.current, lines.at(-1)!].slice(-1000);
               const completed = lines.filter((line, index) => !lines[index + 1]?.startsWith(line));
               setAribLinhas(formatCaptionLines(completed).slice(-2));
               setAribTemCC(true);
@@ -1799,9 +1836,10 @@ export default function MonitorAoVivo() {
   useEffect(()=>{ if (!ccActive||!ccShowOverlay) return; const id=setInterval(()=>setCcLineIdx(i=>(i+1)%CC_LINES.length),5000); return()=>clearInterval(id); },[ccActive,ccShowOverlay]);
 
   const handleRecord = useCallback(() => {
+    if (!recording && (source?.tipo !== "srt" || !config.outputPath)) { alert("Selecione uma pasta no HD e uma fonte SRT para gravar."); return; }
     if (!recording) { blockStart.current=nowStr(); setBlockSec(0); } else if (blockSec>0) { const sz=parseFloat(config.bitrate.replace(/[^\d.]/g,"")||"35")*blockSec/8; setBlocks(b=>[...b,{index:b.length+1,start:blockStart.current,durationSec:blockSec,sizeMB:sz,codec:config.codec,done:true}]); blockStart.current=""; setBlockSec(0); }
     setRecording(v=>!v);
-  }, [recording, blockSec, config]);
+  }, [recording, blockSec, config, source?.tipo]);
 
   const configuredChannels = Math.min(parseInt(config.audioChannels)||8, 8);
   const numCh = source?.tipo === "srt"
@@ -1900,12 +1938,14 @@ export default function MonitorAoVivo() {
       sistema: SISTEMA,
       responsavel: AUTOR,
       geradoEm: new Date().toISOString(),
-      fonte: source ?? null,
+      fonte: source ? { ...source, srt: source.srt ? { ...source.srt, passphrase: undefined } : undefined } : null,
       programaSelecionado: selectedProgramName,
       transporte: srtProbe?.formato ?? null,
       canais: srtProbe?.canais ?? [],
       streams: srtProbe?.streams ?? [],
       bts: {
+        pids: (srtProbe?.streams ?? []).map(stream => ({ pid: stream.id, indice: stream.index, tipo: stream.tipo, codec: stream.codec })),
+        tabelas: { PAT: { programas: srtProbe?.canais ?? [], origem: "Metadados FFmpeg; seção bruta não capturada" }, PMT: { streams: srtProbe?.streams ?? [], origem: "Metadados FFmpeg" }, SDT: { canais: srtProbe?.canais ?? [] }, NIT: { estado: "Seção bruta não capturada" }, EIT: { eventos: epgEvents } },
         tabelasMonitoradas: ["PAT", "PMT", "SDT", "NIT", "EIT"],
         observacao: "Metadados do transporte e streams detectados pelo FFprobe da ponte SRT.",
         canal: srtChannel ?? null,
@@ -1920,9 +1960,9 @@ export default function MonitorAoVivo() {
         referencia: "ITU-R BS.1770-4 / operação de TV digital",
       },
       sinal: { ativo: signalActive, timecode, metricas: metrics },
-      closedCaption: { estado: aribEstado, temCC: aribTemCC, linhas: aribLinhas, duracaoAnaliseMs: aribDurMs, erro: aribErro },
+      closedCaption: { estado: aribEstado, temCC: aribTemCC, linhas: captionHistory.current, linhasNaTela: aribLinhas, duracaoAnaliseMs: aribDurMs, erro: aribErro },
       epg: { estado: epgLoading ? "lendo" : epgError ? "erro" : epgEvents.length ? "capturado" : "sem_epg", eventos: epgEvents, erro: epgError },
-      gravacao: { ativa: recording, blocos: blocks, configuracao: config },
+      gravacao: { ativa: recording, blocos: blocks, configuracao: { codec: "MPEG-TS copy", outputPath: config.outputPath, blockDurationMin: 10 } },
     };
     const json = JSON.stringify(report, null, 2);
     const csv = [
@@ -1940,6 +1980,10 @@ export default function MonitorAoVivo() {
       ["Frames descartados", metrics.dropped],
       ["Força do sinal", `${metrics.strength.toFixed(0)}%`],
       ["Streams detectados", JSON.stringify(srtProbe?.streams ?? [])],
+      ["BTS e PIDs", JSON.stringify(report.bts)],
+      ["Closed Caption completo", JSON.stringify(report.closedCaption)],
+      ["EPG completo", JSON.stringify(report.epg)],
+      ["Canais de áudio", JSON.stringify((srtProbe?.streams ?? []).filter(stream => stream.tipo === "audio"))],
       ["Canais detectados", JSON.stringify(srtProbe?.canais ?? [])],
     ].map(row => row.map(csvCell).join(";")).join("\n");
 
@@ -1976,9 +2020,7 @@ export default function MonitorAoVivo() {
       {/* ── Top bar ──────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 bg-[#0f1117] border border-[#1e2332] rounded-lg px-3 py-2 flex-wrap">
         {/* Back */}
-        <button onClick={()=>setLocation("/")} className="flex items-center gap-1.5 bg-[#1a1f2e] hover:bg-[#222840] border border-[#2a3050] text-xs text-gray-300 rounded-md px-3 py-1.5 transition-colors shrink-0" data-testid="btn-back">
-          <LayoutDashboard className="h-3.5 w-3.5 text-teal-400"/>Dashboard
-        </button>
+
         <div className="w-px h-5 bg-[#2a3050] shrink-0"/>
         <Monitor className="h-4 w-4 text-teal-400 shrink-0"/>
         <div className="flex flex-col shrink-0">
@@ -2047,12 +2089,12 @@ export default function MonitorAoVivo() {
       <AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} onSend={sendAlert} config={config}/>
 
       {/* ── Main grid ────────────────────────────────────────────── */}
-      <div className="grid gap-3" style={{ gridTemplateColumns:"1fr 272px" }}>
+      <MonitorWorkspace>
 
-        {/* Left */}
-        <div className="flex flex-col gap-3">
+        {/* Preview and transport */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
           {/* Video */}
-          <div className={`relative rounded-lg overflow-hidden border-2 transition-colors ${signalActive?(recording?"border-red-500":"border-[#1e4d3a]"):"border-red-700"} bg-black`} style={{ aspectRatio:"16/9" }} data-testid="panel-preview">
+          <div className={`relative rounded-lg overflow-hidden border-2 transition-colors ${signalActive?(recording?"border-red-500":"border-[#1e4d3a]"):"border-red-700"} bg-black`} style={{ aspectRatio:"16/9", width:"100%" }} data-testid="panel-preview">
             {source?.tipo === "srt" ? (
               srtPlaybackUrl ? (
                 <SrtVideo src={srtPlaybackUrl} active={signalActive} onStateChange={onSrtVideoState} onAudioAnalysis={onSrtAudioAnalysis}/>
@@ -2095,12 +2137,12 @@ export default function MonitorAoVivo() {
             )}
           </div>
 
-          <RecordingBlocks blocks={blocks} currentSec={blockSec} recording={recording} codec={config.codec}/>
+          <RecordingBlocks blocks={blocks} currentSec={blockSec} recording={recording} codec="MPEG-TS · cópia do sinal"/>
 
           {/* Scopes / BTS */}
-          <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg overflow-hidden flex flex-col">
+          <div data-testid="panel-tables" className="md:col-span-2 bg-[#0f1117] border border-[#1e2332] rounded-lg overflow-hidden flex flex-col">
             <div className="flex border-b border-[#1e2332]">
-              {(["waveform","vectorscope","histogram","bts"] as ScopeTab[]).map(t=>(
+              {(["bts"] as ScopeTab[]).map(t=>(
                 <button key={t} onClick={()=>setScopeTab(t)} className={`px-4 py-2 text-xs font-medium transition-colors ${scopeTab===t?"text-teal-400 border-b-2 border-teal-400 bg-[#111827]":"text-gray-500 hover:text-gray-300"}`} data-testid={`scope-tab-${t}`}>
                   {t==="bts"?<span className="flex items-center gap-1"><Database className="h-3 w-3"/>Tabelas BTS</span>:t==="waveform"?"Waveform":t==="vectorscope"?"Vectorscope":"Histogram"}
                 </button>
@@ -2112,11 +2154,11 @@ export default function MonitorAoVivo() {
             </div>
           </div>
 
-          <AlertHistory alerts={alerts}/>
+          <div data-testid="alerts" className="md:col-span-2"><AlertHistory alerts={alerts}/></div>
         </div>
 
-        {/* Right */}
-        <div className="flex flex-col gap-3">
+        {/* Compact monitoring panels alongside the preview */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
           {/* VU meters */}
           <div className={`bg-[#0f1117] border rounded-lg p-3 flex flex-col gap-2 flex-1 transition-colors ${audioActive?"border-[#1e2332]":"border-[#1e2332]"}`} data-testid="panel-vu">
             {/* Header */}
@@ -2486,11 +2528,11 @@ export default function MonitorAoVivo() {
             </div>
           )}
         </div>
-      </div>
+      </MonitorWorkspace>
 
       {/* ── Dialogs ───────────────────────────────────────────────── */}
       <EntradasDialog open={entradasOpen} onOpenChange={setEntradasOpen} sources={sources} onSave={s=>{ saveSources(s); setSourceIdx(0); }}/>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={setConfig} sourceName={source?.nome??SISTEMA}/>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); }} sourceName={source?.nome??SISTEMA}/>
       <SrtTestDialog open={srtTestOpen} onOpenChange={setSrtTestOpen} source={source?.tipo==="srt"?source:null}/>
       <BtsReportDialog
         open={btsReportOpen}
@@ -2507,6 +2549,10 @@ export default function MonitorAoVivo() {
     </div>
   );
 }
+
+
+
+
 
 
 

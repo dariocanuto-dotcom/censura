@@ -1,6 +1,16 @@
 import { Router } from "express";
+import { execFile } from "node:child_process";
 
 const router = Router();
+
+router.get("/local-hardware", (_req, res) => {
+  if (process.platform !== "win32") { res.json({ drives: [], tuners: [], erro: "Busca disponível no servidor Windows." }); return; }
+  const command = "$drives=@(Get-CimInstance Win32_LogicalDisk | Where-Object {$_.DriveType -in 2,3} | Select-Object DeviceID,VolumeName,FreeSpace); $tuners=@(Get-CimInstance Win32_PnPEntity | Where-Object {$_.Name -match 'BDA|DVB|ISDB|TV.*Tuner|Digital.*TV|Broadcast'} | Select-Object Name,DeviceID,Status); @{drives=$drives;tuners=$tuners} | ConvertTo-Json -Depth 4 -Compress";
+  execFile("powershell.exe", ["-NoProfile", "-Command", command], { timeout: 15000, windowsHide: true }, (error, stdout) => {
+    if (error) { res.status(500).json({ erro: "Não foi possível enumerar dispositivos locais." }); return; }
+    try { res.json(JSON.parse(stdout)); } catch { res.status(500).json({ erro: "Resposta de dispositivos inválida." }); }
+  });
+});
 
 /**
  * Simulated Blackmagic Design DeckLink SDK device enumeration.

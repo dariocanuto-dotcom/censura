@@ -1,7 +1,7 @@
 import express, { Router } from "express";
 import { spawn } from "node:child_process";
 import { access, mkdir, rm, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { logger } from "../lib/logger";
@@ -440,7 +440,7 @@ router.post("/epg", async (req, res): Promise<void> => {
   res.status(result.ok ? 200 : 502).json({ ...result, temEit: result.eventos.length > 0 });
 });
 
-function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false) {
+function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false, recordingDirectory?: string) {
   const videoMap = programId !== undefined ? `0:p:${programId}:v:0?` : "0:v:0";
   const audioMap = programId !== undefined ? `0:p:${programId}:a:0?` : "0:a:0?";
   return [
@@ -456,6 +456,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     "-hls_flags", "delete_segments+append_list+omit_endlist",
     "-hls_segment_filename", join(outputDir, "segment_%05d.ts"),
     join(outputDir, "index.m3u8"),
+    ...(recordingDirectory ? ["-map", videoMap, "-map", audioMap, "-map", "0:s?", "-c", "copy", "-f", "segment", "-segment_time", "600", "-reset_timestamps", "1", join(recordingDirectory, `${Date.now()}_%05d.ts`)] : []),
     ...(captureMetadata ? ["-map", "0:i:278", "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass"),
     "-map", "0:i:18", "-c", "copy", "-f", "data", "-flush_packets", "1", join(outputDir, "epg.bin")] : []),
   ];
@@ -601,14 +602,18 @@ router.use("/stream", express.static(streamRoot, {
 
 // POST /api/srt/stream — inicia uma ponte SRT para reprodução no navegador
 router.post("/stream", async (req, res): Promise<void> => {
-  const { host, port, mode, latencyMs, passphrase, streamId, programId, captureMetadata } = req.body as {
-    host: string; port: number; mode?: string; latencyMs?: number; passphrase?: string; streamId?: string; programId?: number; captureMetadata?: boolean;
+  const { host, port, mode, latencyMs, passphrase, streamId, programId, captureMetadata, recordingDirectory } = req.body as {
+    host: string; port: number; mode?: string; latencyMs?: number; passphrase?: string; streamId?: string; programId?: number; captureMetadata?: boolean; recordingDirectory?: string;
   };
   if (!host || !Number.isInteger(Number(port)) || Number(port) <= 0 || Number(port) > 65535) {
     res.status(400).json({ ok: false, erro: "host e uma porta válida são obrigatórios" });
     return;
   }
 
+  if (recordingDirectory) {
+    if (!isAbsolute(recordingDirectory)) { res.status(400).json({ ok: false, erro: "Escolha uma pasta absoluta no HD." }); return; }
+    try { await mkdir(recordingDirectory, { recursive: true }); } catch { res.status(400).json({ ok: false, erro: "Não foi possível acessar a pasta de gravação." }); return; }
+  }
   await mkdir(streamRoot, { recursive: true });
   const id = randomUUID();
   const outputDir = join(streamRoot, id);
@@ -617,7 +622,7 @@ router.post("/stream", async (req, res): Promise<void> => {
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;
-  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captureMetadata === true), { stdio: ["ignore", "ignore", "pipe"] });
+  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captureMetadata === true, recordingDirectory), { stdio: ["ignore", "ignore", "pipe"] });
   const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastError: null };
   streamSessions.set(id, session);
 
@@ -639,7 +644,7 @@ router.post("/stream", async (req, res): Promise<void> => {
 
   const ready = await waitForManifest(join(outputDir, "index.m3u8"), proc, 10000);
   if (!ready) {
-    const error = session.lastError ?? "O SRT não entregou um vídeo MPEG-TS dentro de 10 segundos.";
+    const error = session.lastError ?? (stderr.trim() || "O SRT não entregou um vídeo MPEG-TS dentro de 10 segundos.");
     await stopStream(id);
     res.status(502).json({ ok: false, erro: error });
     return;
@@ -710,6 +715,8 @@ router.get("/formats", (_req, res) => {
 });
 
 export default router;
+
+
 
 
 
