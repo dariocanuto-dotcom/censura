@@ -1,3 +1,5 @@
+import { MultichannelRecordings } from "@/components/multichannel-recordings";
+import { RecordingProgress, type RecordingProgressChannel } from '@/components/recording-progress';
 import { MonitorWorkspace } from "@/components/monitor-workspace";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
@@ -531,29 +533,16 @@ function LocalHardwarePanel({ path = "", onPath, disabled = false, tunersOnly = 
   </div>;
 }
 
-function RecordingBlocks({ blocks, currentSec, recording, codec }: { blocks:RecordingBlock[]; currentSec:number; recording:boolean; codec:string }) {
-  const progress=(currentSec/BLOCK_SEC)*100;
+function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serverTime }: { blocks:RecordingBlock[]; recording:boolean; codec:string; onConfigure:()=>void; channels:RecordingProgressChannel[];serverTime?:string }) {
+
   return (
     <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg p-3" data-testid="panel-blocks">
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2"><Scissors className="h-3.5 w-3.5 text-gray-400"/><span className="text-xs font-semibold text-gray-300">Gravação Contínua — Blocos de 10 min</span>{recording&&<Badge variant="destructive" className="text-[10px] py-0 px-1.5 animate-pulse">● REC</Badge>}</div>
-        <span className="text-[11px] font-mono text-gray-500">{codec} · {blocks.length+(recording?1:0)} bloco(s)</span>
+        <div className="flex items-center gap-2"><Scissors className="h-3.5 w-3.5 text-gray-400"/><span className="text-xs font-semibold text-gray-300">Gravação Contínua — Blocos de {(channels[0]?.blockMinutes??10)} min</span>{recording&&<Badge variant="destructive" className="text-[10px] py-0 px-1.5 animate-pulse">● REC</Badge>}</div>
+        <span className="text-[11px] font-mono text-gray-500">{channels[0]?.format?.toUpperCase()??'TS'} · {recording?'Gravando':'Parado'}</span>
       </div>
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {blocks.map(b=>(
-          <div key={b.index} className="flex items-center gap-1 bg-[#111827] border border-[#1e2332] rounded px-2 py-1">
-            <div className="h-1.5 w-1.5 rounded-full bg-teal-500"/><span className="text-[10px] font-mono text-gray-300">#{pad(b.index)} {b.start}</span><span className="text-[10px] text-gray-500">{b.sizeMB.toFixed(0)} MB</span>
-          </div>
-        ))}
-        {blocks.length===0&&!recording&&<span className="text-[11px] text-gray-600 italic">Nenhum bloco gravado ainda.</span>}
-      </div>
-      {recording&&(
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between"><span className="text-[10px] font-mono text-orange-400">Bloco #{pad(blocks.length+1)} — em gravação</span><span className="text-[10px] font-mono text-gray-400">{fmtDur(currentSec)} / 10:00 · {fmtDur(BLOCK_SEC-currentSec)} restam</span></div>
-          <div className="w-full bg-[#1a1f2e] rounded-full h-2 overflow-hidden"><div className="h-full bg-gradient-to-r from-teal-600 to-teal-400 rounded-full" style={{ width:`${progress}%` }}/></div>
-          <div className="flex justify-between text-[9px] text-gray-600 font-mono"><span>0:00</span><span className="text-orange-400">↓ corte automático</span><span>10:00</span></div>
-        </div>
-      )}
+      {!recording&&<p className="text-[11px] text-gray-500">Gravação parada. Consulte os arquivos em Gravar → Busca e exportação.</p>}
+      <RecordingProgress channels={channels} serverTime={serverTime} compact/>
     </div>
   );
 }
@@ -926,9 +915,9 @@ function EntradasDialog({ open, onOpenChange, sources, onSave }: {
 
 // ─── Settings Dialog (codec/audio/CC/notifications) ───────────────────────────
 
-function SettingsDialog({ open, onOpenChange, config, onChange, sourceName }: {
+function SettingsDialog({ open, onOpenChange, config, onChange, sourceName, onRecordings }: {
   open: boolean; onOpenChange: (v: boolean) => void;
-  config: Config; onChange: (c: Config) => void; sourceName: string;
+  config: Config; onChange: (c: Config) => void; sourceName: string; onRecordings:()=>void;
 }) {
   const [draft, setDraft] = useState<Config>(config);
   const [testing, setTesting] = useState(false);
@@ -958,8 +947,7 @@ function SettingsDialog({ open, onOpenChange, config, onChange, sourceName }: {
             <Row label="Formato"><Select value={draft.ccFormat} onValueChange={v=>u("ccFormat",v)}><ST><SelectValue/></ST><SC>{["CEA-708 (DTVCC)","CEA-608 (Line 21)","ABNT NBR 15606-3","SRT","WebVTT","TTML"].map(f=><SI key={f} value={f}>{f}</SI>)}</SC></Select></Row>
           </Sec>
           <Sec title="Gravação Contínua">
-            <Row label="Duração do Bloco"><div className="flex items-center gap-2"><Input value="10" disabled className="bg-[#111] border-[#2a3050] text-gray-500 h-8 text-xs w-16"/><span className="text-xs text-gray-500">minutos (padrão broadcast)</span></div></Row>
-            <LocalHardwarePanel path={draft.outputPath} onPath={path=>u("outputPath",path)}/>
+            <button onClick={()=>{onOpenChange(false);onRecordings();}} className="text-teal-400 text-xs">Configurar HD, codec, retenção e agendamento do canal</button>
           </Sec>
           <Sec title="Notificações de Falha">
             <div className="flex flex-col gap-2 mb-2">
@@ -1340,17 +1328,30 @@ function BtsReportDialog({
 export default function MonitorAoVivo() {
   const [, setLocation] = useLocation();
   const { sources, save: saveSources } = usePersistentSources();
-  const [sourceIdx, setSourceIdx] = useState(0);
+  const [sourceIdx, setSourceIdx] = useState(()=>{
+    const saved=sources.findIndex(s=>s.id===localStorage.getItem('dccp-selected-source'));
+    return saved>=0?saved:Math.max(0,sources.findIndex(s=>s.tipo==='srt'));
+  });
   const [sourceOpen, setSourceOpen] = useState(false);
   const [entradasOpen, setEntradasOpen] = useState(false);
+  const [multichannelOpen, setMultichannelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [srtTestOpen, setSrtTestOpen] = useState(false);
   const [config, setConfig] = useState<Config>(() => ({ ...DEFAULT_CONFIG, outputPath: localStorage.getItem("dccp-recording-path") ?? "" }));
 
   const source = sources[Math.min(sourceIdx, sources.length - 1)] ?? sources[0];
+  useEffect(()=>{if(source)localStorage.setItem('dccp-selected-source',source.id);},[source?.id]);
   const fps = source ? srcFps(source) : 29.97;
 
   const [recording, setRecording] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingError, setRecordingError] = useState('');
+  const [recordingService, setRecordingService] = useState<any>({channels:[],files:[]});
+  useEffect(()=>{
+    let alive=true;
+    const refresh=async()=>{try{const response=await fetch('/api/recordings');if(!response.ok)return;const data=await response.json();if(!alive)return;setRecordingService(data);setRecording(data.channels.some((c:any)=>c.running));setBlocks(data.files.map((f:any,index:number)=>({index:index+1,start:new Date(f.start).toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo'}),durationSec:(Date.parse(f.end)-Date.parse(f.start))/1000,sizeMB:f.bytes/1000000,codec:f.codec,done:true})));}catch{}};
+    void refresh();const timer=setInterval(()=>void refresh(),5000);return()=>{alive=false;clearInterval(timer);};
+  },[]);
   const [signalActive, setSignalActive] = useState(true);
   const [ccActive, setCcActive] = useState(true);
   const [ccShowOverlay, setCcShowOverlay] = useState(true);
@@ -1363,8 +1364,6 @@ export default function MonitorAoVivo() {
   const [recBlink, setRecBlink] = useState(true);
 
   const [blocks, setBlocks] = useState<RecordingBlock[]>([]);
-  const [blockSec, setBlockSec] = useState(0);
-  const blockStart = useRef<string>("");
 
   const [metrics, setMetrics] = useState({ bitrate: 35.4, dropped: 0, strength: 98 });
   const [audioActive, setAudioActive] = useState(false); // only true when audio confirmed arriving
@@ -1397,7 +1396,8 @@ export default function MonitorAoVivo() {
   const [srtPlaybackError, setSrtPlaybackError] = useState<string | null>(null);
   const [srtProbe, setSrtProbe] = useState<SrtProbeResult | null>(null);
   const [srtProbeLoading, setSrtProbeLoading] = useState(false);
-  const [srtProgramBySource, setSrtProgramBySource] = useState<Record<string, number | undefined>>({});
+  const [srtProgramBySource, setSrtProgramBySource] = useState<Record<string, number | undefined>>(()=>{try{return JSON.parse(localStorage.getItem('dccp-selected-programs')??'{}');}catch{return {};}});
+  useEffect(()=>{localStorage.setItem('dccp-selected-programs',JSON.stringify(srtProgramBySource));},[srtProgramBySource]);
   const [srtBridgeNonce, setSrtBridgeNonce] = useState(0);
   const srtSessionId = useRef<string | null>(null);
   const srtStopPromise = useRef<Promise<void>>(Promise.resolve());
@@ -1425,6 +1425,14 @@ export default function MonitorAoVivo() {
     }
     return null;
   }, [source]);
+  const recordingInput={name:source?.nome??'Entrada',url:sourceStreamUrl()??'',programId:source?.tipo==='srt'?srtProgramBySource[source.id]:undefined};
+  useEffect(()=>{
+    const channel=recordingService.channels.find((c:any)=>c.id==='1');
+    if(!channel?.enabled||(channel.url===recordingInput.url&&channel.name===recordingInput.name&&channel.programId===recordingInput.programId))return;
+    let cancelled=false;
+    void fetch('/api/recordings/channels/1',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...channel,...recordingInput,url:recordingInput.url||channel.url,enabled:Boolean(recordingInput.url)})}).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error);if(!cancelled){setRecordingService(data);setRecording(data.channels.some((c:any)=>c.running));}}).catch(error=>console.error('Falha ao acompanhar entrada na gravação',error));
+    return()=>{cancelled=true;};
+  },[recordingInput.url,recordingInput.name,recordingInput.programId,recordingService.channels[0]?.enabled,recordingService.channels[0]?.url,recordingService.channels[0]?.name,recordingService.channels[0]?.programId]);
 
   // ── ARIB CC capture ─────────────────────────────────────────────────────────
   const lerAribCC = useCallback(async (durationSec = 15) => {
@@ -1560,6 +1568,7 @@ export default function MonitorAoVivo() {
     srtSessionId.current = null;
 
     if (!currentSource || currentSource.tipo !== "srt" || !currentSource.srt || !signalActive) return;
+    const currentSrt = currentSource.srt;
     setSrtProbeLoading(true);
 
     const start = async () => {
@@ -1570,9 +1579,8 @@ export default function MonitorAoVivo() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ...currentSource.srt,
-            ...(recording ? { recordingDirectory: config.outputPath } : {}),
-            captureMetadata: currentSource.srt.host === "45.176.168.146",
+            ...currentSrt,
+            captureMetadata: true,
             ...(srtProgramBySource[currentSource.id] !== undefined
               ? { programId: srtProgramBySource[currentSource.id] }
               : {}),
@@ -1615,7 +1623,7 @@ export default function MonitorAoVivo() {
           .catch(() => undefined);
       }
     };
-  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, signalActive, srtBridgeNonce, srtProgramBySource, recording, config.outputPath]);
+  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, signalActive, srtBridgeNonce, srtProgramBySource]);
 
   const srtChannel = srtProbe?.canal;
   const srtVideoStream = srtProbe?.streams.find(stream => stream.tipo === "video" && srtChannel?.streams?.includes(stream.index))
@@ -1624,6 +1632,12 @@ export default function MonitorAoVivo() {
     ?? srtProbe?.streams.find(stream => stream.tipo === "audio");
   const isAribSource = source?.tipo === "srt" || source?.tipo === "udp";
   const hasDecodedArib = aribTemCC && aribLinhas.length > 0;
+  useEffect(()=>{
+    if(recordingService.channels[0]?.captureMode!=='pvw'||!recordingService.channels[0]?.enabled)return;
+    const text=ccActive&&ccShowOverlay&&signalActive&&hasDecodedArib?aribLinhas.slice(-2).join('\n'):'';
+    const send=()=>{void fetch('/api/recordings/caption',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}).catch(()=>{});};
+    send();const timer=setInterval(send,1000);return()=>clearInterval(timer);
+  },[aribLinhas,hasDecodedArib,ccActive,ccShowOverlay,signalActive,recordingService.channels[0]?.captureMode,recordingService.channels[0]?.enabled]);
   const epgNow = Date.now();
   const visibleEpgEvents = epgEvents.filter(event => !event.startTime || Date.parse(event.startTime) + event.durationSec * 1000 > epgNow);
   const nextEpgEvent = visibleEpgEvents.find(event => event.startTime && Date.parse(event.startTime) > epgNow);
@@ -1832,14 +1846,27 @@ export default function MonitorAoVivo() {
   }, [audioActive, signalActive, config.audioChannels, source?.tipo, srtAudioStream?.canais, audioLevels]);
 
   useEffect(()=>{ const id=setInterval(()=>{ if (!signalActive) return; setMetrics(m=>({ bitrate:parseFloat((35+Math.random()*4).toFixed(1)), dropped:Math.random()>0.97?m.dropped+1:m.dropped, strength:Math.max(88,Math.min(100,m.strength+(Math.random()-0.5)*2)) })); },1200); return()=>clearInterval(id); },[signalActive]);
-  useEffect(()=>{ if (!recording) return; if (blockStart.current==="") blockStart.current=nowStr(); const id=setInterval(()=>{ setBlockSec(prev=>{ if (prev+1>=BLOCK_SEC) { const sz=parseFloat(config.bitrate.replace(/[^\d.]/g,"")||"35")*60*10/8; setBlocks(b=>[...b,{index:b.length+1,start:blockStart.current,durationSec:BLOCK_SEC,sizeMB:sz,codec:config.codec,done:true}]); blockStart.current=nowStr(); return 0; } return prev+1; }); },1000); return()=>clearInterval(id); },[recording,config]);
   useEffect(()=>{ if (!ccActive||!ccShowOverlay) return; const id=setInterval(()=>setCcLineIdx(i=>(i+1)%CC_LINES.length),5000); return()=>clearInterval(id); },[ccActive,ccShowOverlay]);
 
-  const handleRecord = useCallback(() => {
-    if (!recording && (source?.tipo !== "srt" || !config.outputPath)) { alert("Selecione uma pasta no HD e uma fonte SRT para gravar."); return; }
-    if (!recording) { blockStart.current=nowStr(); setBlockSec(0); } else if (blockSec>0) { const sz=parseFloat(config.bitrate.replace(/[^\d.]/g,"")||"35")*blockSec/8; setBlocks(b=>[...b,{index:b.length+1,start:blockStart.current,durationSec:blockSec,sizeMB:sz,codec:config.codec,done:true}]); blockStart.current=""; setBlockSec(0); }
-    setRecording(v=>!v);
-  }, [recording, blockSec, config, source?.tipo]);
+  const handleRecord = useCallback(() => setMultichannelOpen(true), []);
+  const toggleRecording = async () => {
+    if(recordingBusy)return;
+    setRecordingBusy(true);setRecordingError('');
+    try {
+      const statusResponse=await fetch('/api/recordings');
+      if(!statusResponse.ok)throw new Error('Não foi possível consultar a gravação.');
+      const current=await statusResponse.json();
+      const channel=current.channels.find((c:any)=>c.id==='1');
+      if(!channel){setMultichannelOpen(true);return;}
+      const enabled=!channel.enabled;
+      if(enabled&&!recordingInput.url)throw new Error('Selecione uma entrada SRT, UDP ou RTP antes de iniciar.');
+      const response=await fetch('/api/recordings/channels/1',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...channel,...(enabled?{...recordingInput,startAt:undefined,endAt:undefined}:{}),enabled})});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||'Não foi possível alterar a gravação.');
+      setRecordingService(data);setRecording(data.channels.some((c:any)=>c.running));
+    }catch(error){setRecordingError(error instanceof Error?error.message:String(error));}
+    finally{setRecordingBusy(false);}
+  };
 
   const configuredChannels = Math.min(parseInt(config.audioChannels)||8, 8);
   const numCh = source?.tipo === "srt"
@@ -1962,7 +1989,7 @@ export default function MonitorAoVivo() {
       sinal: { ativo: signalActive, timecode, metricas: metrics },
       closedCaption: { estado: aribEstado, temCC: aribTemCC, linhas: captionHistory.current, linhasNaTela: aribLinhas, duracaoAnaliseMs: aribDurMs, erro: aribErro },
       epg: { estado: epgLoading ? "lendo" : epgError ? "erro" : epgEvents.length ? "capturado" : "sem_epg", eventos: epgEvents, erro: epgError },
-      gravacao: { ativa: recording, blocos: blocks, configuracao: { codec: "MPEG-TS copy", outputPath: config.outputPath, blockDurationMin: 10 } },
+      gravacao: { ativa: recording, ...recordingService },
     };
     const json = JSON.stringify(report, null, 2);
     const csv = [
@@ -2074,7 +2101,10 @@ export default function MonitorAoVivo() {
 
         {/* Record */}
         <button onClick={handleRecord} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition-colors shrink-0 ${recording?"bg-red-700 hover:bg-red-600 text-white":"bg-[#1a1f2e] hover:bg-[#222840] border border-[#2a3050] text-gray-300"}`} data-testid="btn-record">
-          {recording?<><Square className="h-3 w-3"/>Parar</>:<><Play className="h-3 w-3"/>Gravar</>}
+          <Settings className="h-3 w-3"/>Gravar
+        </button>
+        <button disabled={recordingBusy} onClick={()=>void toggleRecording()} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition-colors shrink-0 disabled:opacity-50 ${recordingService.channels[0]?.enabled?'bg-red-700 hover:bg-red-600 text-white':'bg-[#1a1f2e] hover:bg-[#222840] border border-red-800 text-red-400'}`} data-testid="btn-record-toggle" aria-label={recordingService.channels[0]?.enabled?'Parar gravação':'Iniciar gravação'}>
+          {recordingBusy?'Aguarde…':recordingService.channels[0]?.enabled?<><Square className="h-3 w-3"/>Stop</>:<><Circle className="h-3 w-3"/>REC</>}
         </button>
 
         {/* Settings */}
@@ -2087,6 +2117,7 @@ export default function MonitorAoVivo() {
 
       {/* ── Alert banners ─────────────────────────────────────────── */}
       <AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} onSend={sendAlert} config={config}/>
+      {recordingError&&<div role="alert" className="px-4 py-2 text-xs text-red-300 bg-red-950/50">{recordingError}</div>}
 
       {/* ── Main grid ────────────────────────────────────────────── */}
       <MonitorWorkspace>
@@ -2120,7 +2151,6 @@ export default function MonitorAoVivo() {
                 <div className="bg-black/85 text-white text-sm font-medium px-4 py-1.5 rounded max-w-[90%] text-center border border-white/10" data-testid="cc-overlay">
                   {hasDecodedArib ? (
                     <>
-                      <span className="text-orange-400 text-[10px] font-mono mr-2 align-middle">ARIB B24</span>
                       <div className="font-mono leading-relaxed">
                         <div className="min-h-6">{aribLinhas.length > 1 ? aribLinhas[aribLinhas.length - 2] : "\u00a0"}</div>
                         <div className="min-h-6">{aribLinhas.at(-1)}</div>
@@ -2137,7 +2167,7 @@ export default function MonitorAoVivo() {
             )}
           </div>
 
-          <RecordingBlocks blocks={blocks} currentSec={blockSec} recording={recording} codec="MPEG-TS · cópia do sinal"/>
+          <RecordingBlocks blocks={blocks} recording={recording} codec="Um canal · TS/BTS original" onConfigure={()=>setMultichannelOpen(true)} channels={recordingService.channels} serverTime={recordingService.serverTime}/>
 
           {/* Scopes / BTS */}
           <div data-testid="panel-tables" className="md:col-span-2 bg-[#0f1117] border border-[#1e2332] rounded-lg overflow-hidden flex flex-col">
@@ -2531,8 +2561,9 @@ export default function MonitorAoVivo() {
       </MonitorWorkspace>
 
       {/* ── Dialogs ───────────────────────────────────────────────── */}
+      <MultichannelRecordings open={multichannelOpen} onOpenChange={setMultichannelOpen} inputSource={recordingInput}/>
       <EntradasDialog open={entradasOpen} onOpenChange={setEntradasOpen} sources={sources} onSave={s=>{ saveSources(s); setSourceIdx(0); }}/>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); }} sourceName={source?.nome??SISTEMA}/>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); }} sourceName={source?.nome??SISTEMA} onRecordings={()=>setMultichannelOpen(true)}/>
       <SrtTestDialog open={srtTestOpen} onOpenChange={setSrtTestOpen} source={source?.tipo==="srt"?source:null}/>
       <BtsReportDialog
         open={btsReportOpen}
@@ -2549,11 +2580,3 @@ export default function MonitorAoVivo() {
     </div>
   );
 }
-
-
-
-
-
-
-
-

@@ -189,7 +189,7 @@ function parseEitSection(section: Buffer): EpgEvent[] {
   return events;
 }
 
-function createEitCollector() {
+export function createEitCollector() {
   let sectionBuffer = Buffer.alloc(0);
   const events = new Map<string, EpgEvent>();
 
@@ -445,7 +445,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
   const audioMap = programId !== undefined ? `0:p:${programId}:a:0?` : "0:a:0?";
   return [
     "-hide_banner", "-loglevel", "info",
-    "-fflags", "nobuffer", "-flags", "low_delay",
+    "-fflags", "+genpts+igndts", "-err_detect", "ignore_err", "-probesize", "5000000", "-analyzeduration", "5000000",
     ...(captureMetadata ? ["-c:s", "libaribcaption", "-sub_type", "ass", "-caption_encoding", "latin"] : []),
     "-i", url,
     "-map", videoMap, "-map", audioMap,
@@ -618,7 +618,7 @@ router.post("/stream", async (req, res): Promise<void> => {
   const id = randomUUID();
   const outputDir = join(streamRoot, id);
   await mkdir(outputDir, { recursive: true });
-  const url = buildSrtUrl(host, Number(port), mode ?? "caller", Number(latencyMs) || 120, passphrase, streamId);
+  const url = buildSrtUrl(host, Number(port), mode ?? "caller", Math.max(Number(latencyMs) || 120, 1000), passphrase, streamId);
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;
@@ -627,30 +627,40 @@ router.post("/stream", async (req, res): Promise<void> => {
   streamSessions.set(id, session);
 
   let stderr = "";
-  proc.stderr?.on("data", (data: Buffer) => { stderr = `${stderr}${data.toString()}`.slice(-20000); });
+  let inputDescription = "";
+  const playbackFailure = () => {
+    const useful = stderr.split(/\r?\n/).filter(line => /error opening|conversion failed|connection.*(failed|rejected)|unable to|not found|invalid argument|matches no streams|could not|failed to/i.test(line)).slice(-3).join(' ').slice(0,450);
+    return useful || 'O sinal não gerou vídeo para o preview. Verifique o programa selecionado e a estabilidade do transporte SRT.';
+  };
+  proc.stderr?.on("data", (data: Buffer) => {
+    const text = data.toString();
+    stderr = `${stderr}${text}`.slice(-12000);
+    if(inputDescription.length < 100000) inputDescription += text.slice(0,100000-inputDescription.length);
+  });
   proc.on("error", error => {
     session.lastError = error.message.slice(-1000);
     logger.warn({ streamId: id, err: error.message }, "SRT playback bridge failed to start");
   });
   proc.on("close", code => {
     if (code !== 0 && streamSessions.has(id)) {
-      session.lastError = stderr || `ffmpeg encerrou com código ${code}`;
-      logger.warn({ streamId: id, code, error: session.lastError }, "SRT playback bridge stopped");
+      session.lastError = playbackFailure();
+      logger.warn({ streamId: id, code, error: stderr }, "SRT playback bridge stopped");
     }
   });
 
   // Evita que uma aba abandonada mantenha um decoder ativo indefinidamente.
   setTimeout(() => { void stopStream(id); }, 30 * 60 * 1000);
 
-  const ready = await waitForManifest(join(outputDir, "index.m3u8"), proc, 10000);
+  const ready = await waitForManifest(join(outputDir, "index.m3u8"), proc, 30000);
   if (!ready) {
-    const error = session.lastError ?? (stderr.trim() || "O SRT não entregou um vídeo MPEG-TS dentro de 10 segundos.");
+    const error = session.lastError ?? playbackFailure();
+    logger.warn({streamId:id,error:stderr},'SRT preview did not become ready');
     await stopStream(id);
     res.status(502).json({ ok: false, erro: error });
     return;
   }
 
-  const parsed = parseFfmpegInput(stderr, selectedProgramId);
+  const parsed = parseFfmpegInput(inputDescription, selectedProgramId);
   res.status(201).json({
     ok: true,
     streamId: id,

@@ -1,3 +1,4 @@
+import recordingsRouter from "./recordings";
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import usuariosRouter from "./usuarios";
@@ -14,6 +15,7 @@ import aribRouter from "./arib";
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/recordings", recordingsRouter);
 router.use("/usuarios", usuariosRouter);
 router.use("/conteudos", conteudosRouter);
 router.use("/descritores", descritoresRouter);

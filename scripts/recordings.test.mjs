@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { channelSlug, dayName, validateChannel, retentionCandidates, recordingArgs, resolveSegmentPath, blockEnd } from '../artifacts/api-server/src/lib/recordings.ts';
+import { resolve } from 'node:path';
+const base={id:'1',name:'TV Feliz',url:'srt://127.0.0.1:9999',directory:process.cwd(),enabled:false,codec:'h264',format:'mp4',videoKbps:1000,audioKbps:64,retentionDays:30,blockMinutes:10,width:1920,height:1080};
+test('progresso considera primeiro bloco parcial e limite do agendamento',()=>{const start=Date.parse('2026-10-08T22:01:35Z');assert.equal(new Date(blockEnd(start,2)).toISOString(),'2026-10-08T22:02:00.000Z');assert.equal(new Date(blockEnd(start,2,'2026-10-08T22:01:50Z')).toISOString(),'2026-10-08T22:01:50.000Z');assert.equal(new Date(blockEnd(Date.parse('2026-10-08T22:02:00Z'),2)).toISOString(),'2026-10-08T22:04:00.000Z');});
+test('CSV de FFmpeg é localizado na pasta diária gerenciada',()=>{assert.equal(resolveSegmentPath(base,'0810202622h20_00.mp4'),resolve(base.directory,'DC-Censura-1-TV_Feliz','TV_Feliz_08102026','0810202622h20_00.mp4'));assert.equal(resolveSegmentPath(base,'../../state.json'),null);});
+test('nome de canal não permite caminhos externos',()=>assert.equal(channelSlug('../TV Feliz/'), 'TV_Feliz'));
+test('pasta usa dia brasileiro na virada UTC',()=>assert.equal(dayName(new Date('2026-10-09T01:00:00Z')),'08102026'));
+test('rejeita terceiro canal, resolução além de Full HD e retenção além de 90 dias',()=>{for(const patch of [{id:'2'},{width:3840},{retentionDays:91}])assert.throws(()=>validateChannel({...base,...patch}));});
+test('retencao seleciona somente blocos vencidos do canal, sem remover bloco recente ou de outro canal',()=>{const now=Date.parse('2026-10-08T22:00:00Z');const files=[{id:'old',channelId:'1',start:'2026-08-01T00:00:00Z',end:'2026-08-01T00:10:00Z'},{id:'new',channelId:'1',start:'2026-10-08T00:00:00Z',end:'2026-10-08T00:10:00Z'},{id:'other',channelId:'2',start:'2026-08-01T00:00:00Z',end:'2026-08-01T00:10:00Z'}];assert.deepEqual(retentionCandidates(files,base,now).map(f=>f.id),['old']);});
+test('cada codec usa encoder correto, bloqueio FullHD e segmentação diária com relógio',()=>{for(const codec of ['h264','h265']){const args=recordingArgs({...base,codec},process.cwd(),'list.csv');assert.ok(args.includes(codec==='h265'?'libx265':'libx264'));assert.ok(args.includes('600'));assert.match(args.at(-1),/\.pending.*%09d/);}});
+
+test('preserva codecs e formatos escolhidos',()=>{for(const codec of ['h264','h265'])for(const format of ['mp4','mkv']){const result=validateChannel({...base,codec,format});assert.equal(result.codec,codec);assert.equal(result.format,format);}assert.throws(()=>validateChannel({...base,codec:'copy'}));assert.throws(()=>validateChannel({...base,format:'ts'}));});

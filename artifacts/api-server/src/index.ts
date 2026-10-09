@@ -1,3 +1,5 @@
+import { shutdownConversions } from './lib/conversions';
+import { initRecordings, shutdownRecordings } from "./lib/recordings";
 import app from "./app";
 import { logger } from "./lib/logger";
 
@@ -24,3 +26,6 @@ app.listen(port, (err) => {
   logger.info({ port }, "Server listening");
 });
 
+
+void initRecordings().catch(error => logger.error({ err: error }, "Recording service initialization failed"));
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { void Promise.all([shutdownRecordings(),shutdownConversions()]).finally(() => process.exit(0)); });
