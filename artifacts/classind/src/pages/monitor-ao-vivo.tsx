@@ -2034,8 +2034,9 @@ export default function MonitorAoVivo() {
     ].map(row => row.map(csvCell).join(";")).join("\r\n");
 
     try {
-      const response=await fetch('/api/recordings/report/excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({report,directory:btsDirectoryPath.trim()||undefined})});
-      if(!response.ok){const data=await response.json();throw new Error(data.error);}
+      const excelReport={sistema:report.sistema,responsavel:report.responsavel,geradoEm:report.geradoEm,fonte:{nome:report.fonte?.nome},programaSelecionado:report.programaSelecionado,auditoria:report.auditoria,sinal:{metricas:report.sinal.metricas},epg:{eventosProgramaSelecionado:report.epg.eventosProgramaSelecionado}};
+      const response=await fetch('/api/recordings/report/excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({report:excelReport,directory:btsDirectoryPath.trim()||undefined})});
+      if(!response.ok){const data=await response.json().catch(()=>null);throw new Error(data?.error??`Falha ao gerar Excel (HTTP ${response.status}).`);}
       if(btsDirectoryPath.trim()){const data=await response.json();setBtsLastSaved(`Relatório Excel salvo: ${data.file}`);}
       else {
         const blob=await response.blob();const xlsxName=`dccp-bts-${stamp}.xlsx`;
@@ -2053,9 +2054,7 @@ export default function MonitorAoVivo() {
         }
       }
     } catch (error) {
-      downloadTextFile(jsonName, json, "application/json;charset=utf-8");
-      downloadTextFile(csvName, csv, "text/csv;charset=utf-8");
-      setBtsLastSaved(`Falha ao gerar ou salvar Excel; JSON e CSV baixados como alternativa. ${String(error)}`);
+      setBtsLastSaved(`Não foi possível gerar ou salvar o relatório Excel: ${String(error)}`);
     } finally {
       setBtsSaving(false);
     }
