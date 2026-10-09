@@ -67,12 +67,12 @@ type AlertStatus = "pendente" | "enviando" | "enviado" | "erro";
 interface AlertEntry { id: string; tipo: AlertTipo; titulo: string; mensagem: string; hora: string; status: AlertStatus; canais: string[]; erros: string[] }
 interface RecordingBlock { index: number; start: string; durationSec: number; sizeMB: number; codec: string; done: boolean }
 type AuditStatus = "ok" | "erro" | "atencao" | "aguardando";
-interface BtsAuditCheck { id: "video" | "audio" | "closed_caption" | "loudness"; label: string; status: AuditStatus; detalhe: string }
+interface BtsAuditCheck { id: "video" | "audio" | "closed_caption" | "loudness" | "epg"; label: string; status: AuditStatus; detalhe: string }
 interface ReportDirectoryHandle {
   name: string;
   requestPermission?: (options: { mode: "readwrite" }) => Promise<"granted" | "denied" | "prompt">;
   getFileHandle: (name: string, options: { create: boolean }) => Promise<{
-    createWritable: () => Promise<{ write: (content: string) => Promise<void>; close: () => Promise<void> }>;
+    createWritable: () => Promise<{ write: (content: string | Blob) => Promise<void>; close: () => Promise<void> }>;
   }>;
 }
 interface DirectoryPickerWindow extends Window {
@@ -1215,6 +1215,7 @@ function BtsReportDialog({
   sourceName,
   selectedProgram,
   directoryName,
+  directoryPath,onDirectoryPath,
   onChooseDirectory,
   onGenerate,
   saving,
@@ -1226,6 +1227,7 @@ function BtsReportDialog({
   sourceName: string;
   selectedProgram: string;
   directoryName: string | null;
+  directoryPath:string;onDirectoryPath:(path:string)=>void;
   onChooseDirectory: () => void;
   onGenerate: () => void;
   saving: boolean;
@@ -1247,7 +1249,7 @@ function BtsReportDialog({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-widest text-gray-500">Destino dos arquivos</p>
-                <p className="mt-1 flex items-center gap-1.5 text-sm font-mono text-gray-200 truncate">
+                <p className="mt-1 flex items-start gap-1.5 text-sm font-mono text-gray-200 break-all" title={directoryName ?? undefined}>
                   <HardDrive className="h-3.5 w-3.5 shrink-0 text-blue-400"/>
                   {directoryName ?? "Nenhum HD/diretório selecionado"}
                 </p>
@@ -1261,9 +1263,8 @@ function BtsReportDialog({
                 Selecionar HD
               </button>
             </div>
-            <p className="mt-2 text-[10px] leading-relaxed text-gray-500">
-              O navegador só grava em um diretório depois da sua autorização. Sem seleção, os arquivos serão baixados para a pasta padrão do navegador.
-            </p>
+            <label className="block mt-3 text-xs text-gray-300">Caminho da pasta no computador da API<Input value={directoryPath} onChange={e=>onDirectoryPath(e.target.value)} placeholder="D:\Relatorios" className="mt-1 bg-[#1a1f2e] font-mono text-xs"/></label>
+            <p className="mt-2 text-[10px] leading-relaxed text-gray-500">Informe o caminho completo para salvar diretamente no HD. Sem caminho ou pasta selecionada, o relatório será baixado pelo navegador.</p>
           </div>
 
           <div>
@@ -1377,6 +1378,7 @@ export default function MonitorAoVivo() {
   const [btsSaving, setBtsSaving] = useState(false);
   const [btsLastSaved, setBtsLastSaved] = useState<string | null>(null);
   const [btsDirectory, setBtsDirectory] = useState<ReportDirectoryHandle | null>(null);
+  const [btsDirectoryPath,setBtsDirectoryPath]=useState(()=>localStorage.getItem('dccp-report-directory')??'');
 
   // ── ARIB B24 CC ──────────────────────────────────────────────────────────────
   const [aribLoading, setAribLoading] = useState(false);
@@ -1895,7 +1897,20 @@ export default function MonitorAoVivo() {
     : loudnessDb === null
       ? "aguardando"
       : loudnessDb >= -25 && loudnessDb <= -21 ? "ok" : "erro";
+  const mappedCaptionStreams=(srtProbe?.streams??[]).filter(stream=>/arib|caption|subtitle/i.test(stream.codec));
+  const selectedCaptionStreams=mappedCaptionStreams.filter(stream=>!srtChannel?.streams?.length||srtChannel.streams.includes(stream.index));
+  const ccDecoded=aribTemCC||captionHistory.current.length>0;
+  const ccMapping=selectedCaptionStreams.length?selectedCaptionStreams:mappedCaptionStreams;
+  const programEpg=epgEvents.filter(event=>srtChannel?.programaId===undefined||event.serviceId===srtChannel.programaId).sort((a,b)=>Date.parse(a.startTime??'')-Date.parse(b.startTime??''));
+  const reportNow=Date.now();
+  const onAirEpg=programEpg.find(event=>event.startTime&&Date.parse(event.startTime)<=reportNow&&Date.parse(event.startTime)+event.durationSec*1000>reportNow);
+  const upcomingEpg=programEpg.find(event=>event.startTime&&Date.parse(event.startTime)>reportNow);
   const btsChecks: BtsAuditCheck[] = [
+    {
+      id:'epg',label:'EPG · Programação',
+      status:epgError?'erro':programEpg.length?'ok':epgLoading?'aguardando':epgEvents.length?'atencao':'aguardando',
+      detalhe:epgError??(programEpg.length?`${programEpg.length} evento(s) · EIT PID 18${onAirEpg?` · No ar: ${onAirEpg.title}`:''}${upcomingEpg?` · Próximo: ${upcomingEpg.title}`:''}`:epgEvents.length?'EPG recebido para outros serviços; sem eventos do programa selecionado.':'Aguardando programação EIT da emissora.'),
+    },
     {
       id: "video",
       label: "Vídeo",
@@ -1919,10 +1934,10 @@ export default function MonitorAoVivo() {
     {
       id: "closed_caption",
       label: "Closed Caption",
-      status: source?.tipo !== "srt" ? (ccActive ? "atencao" : "erro") : aribLoading || aribDurMs === null ? "aguardando" : aribTemCC ? "ok" : "erro",
+      status: source?.tipo !== "srt" ? (ccActive ? "atencao" : "erro") : ccDecoded ? "ok" : ccMapping.length ? "atencao" : aribLoading || aribDurMs === null ? "aguardando" : "erro",
       detalhe: source?.tipo !== "srt"
         ? ccActive ? "CC habilitado no painel; captura ARIB depende de transporte MPEG-TS." : "Closed Caption desativado."
-        : aribLoading || aribDurMs === null ? "Ainda não foi realizada uma captura ARIB B24." : aribTemCC ? `${aribLinhas.length} linha(s) ARIB B24 decodificada(s).` : aribEstado === "erro" ? aribErro ?? "Falha na captura ARIB." : "Falta de Closed Caption no período analisado.",
+        : ccDecoded ? `CC decodificado · ${captionHistory.current.length} atualização(ões) · ${ccMapping.map(s=>`PID ${s.id} · ${s.codec}`).join(', ')||'ARIB B24'}` : ccMapping.length ? `CC mapeado: ${ccMapping.map(s=>`PID ${s.id} · ${s.codec}`).join(', ')} · sem texto decodificado no período.` : aribLoading || aribDurMs === null ? "Aguardando identificação ou decodificação do CC." : aribEstado === "erro" ? aribErro ?? "Falha na captura ARIB." : "Falta de Closed Caption no período analisado.",
     },
     {
       id: "loudness",
@@ -1941,7 +1956,7 @@ export default function MonitorAoVivo() {
       return;
     }
     try {
-      const handle = await picker();
+      const handle = await picker.call(window);
       const permission = await handle.requestPermission?.({ mode: "readwrite" });
       if (permission && permission !== "granted") {
         setBtsLastSaved("Permissão de gravação recusada para este diretório.");
@@ -1987,12 +2002,12 @@ export default function MonitorAoVivo() {
         referencia: "ITU-R BS.1770-4 / operação de TV digital",
       },
       sinal: { ativo: signalActive, timecode, metricas: metrics },
-      closedCaption: { estado: aribEstado, temCC: aribTemCC, linhas: captionHistory.current, linhasNaTela: aribLinhas, duracaoAnaliseMs: aribDurMs, erro: aribErro },
-      epg: { estado: epgLoading ? "lendo" : epgError ? "erro" : epgEvents.length ? "capturado" : "sem_epg", eventos: epgEvents, erro: epgError },
+      closedCaption: { estado: ccDecoded?'capturado':ccMapping.length?'mapeado_sem_texto':aribEstado, temCC: ccMapping.length>0||ccDecoded, textoDecodificado:ccDecoded, streams:ccMapping.map(stream=>({pid:stream.id,indice:stream.index,codec:stream.codec,noProgramaSelecionado:selectedCaptionStreams.includes(stream)})), linhas: captionHistory.current, linhasNaTela: aribLinhas, duracaoAnaliseMs: aribDurMs, erro: aribErro },
+      epg: { estado: epgLoading ? "lendo" : epgError ? "erro" : epgEvents.length ? "capturado" : "sem_epg", pid:18,fusoHorario:'America/Sao_Paulo',noAr:onAirEpg??null,proximo:upcomingEpg??null,eventosProgramaSelecionado:programEpg,eventos: epgEvents, erro: epgError },
       gravacao: { ativa: recording, ...recordingService },
     };
     const json = JSON.stringify(report, null, 2);
-    const csv = [
+    const csv = '\uFEFF' + [
       ["Campo", "Valor"],
       ["Sistema", SISTEMA_FULL],
       ["Gerado em", report.geradoEm],
@@ -2001,6 +2016,7 @@ export default function MonitorAoVivo() {
       ["Vídeo", btsChecks.find(check => check.id === "video")?.detalhe],
       ["Áudio", btsChecks.find(check => check.id === "audio")?.detalhe],
       ["Closed Caption", btsChecks.find(check => check.id === "closed_caption")?.detalhe],
+      ["EPG", btsChecks.find(check => check.id === "epg")?.detalhe],
       ["Loudness", btsChecks.find(check => check.id === "loudness")?.detalhe],
       ["Falhas", btsChecks.filter(check => check.status === "erro").map(check => check.label).join(", ") || "Nenhuma"],
       ["Bitrate", `${metrics.bitrate} Mbps`],
@@ -2012,30 +2028,34 @@ export default function MonitorAoVivo() {
       ["EPG completo", JSON.stringify(report.epg)],
       ["Canais de áudio", JSON.stringify((srtProbe?.streams ?? []).filter(stream => stream.tipo === "audio"))],
       ["Canais detectados", JSON.stringify(srtProbe?.canais ?? [])],
-    ].map(row => row.map(csvCell).join(";")).join("\n");
+      [],["EPG · programação recebida"],
+      ["Serviço","Evento","Título","Início (Brasília)","Fim (Brasília)","Duração (segundos)","Situação","Descrição","Tabela EIT"],
+      ...epgEvents.map(event=>{const start=event.startTime?Date.parse(event.startTime):null;const end=start===null?null:start+event.durationSec*1000;const local=(time:number|null)=>time===null?'':new Date(time).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'});return [event.serviceId,event.eventId,event.title,local(start),local(end),event.durationSec,start===null?'Sem horário':start>reportNow?'Próximo':end!>reportNow?'No ar':'Encerrado',event.description,`0x${event.tableId.toString(16)}`];}),
+    ].map(row => row.map(csvCell).join(";")).join("\r\n");
 
     try {
-      if (btsDirectory) {
+      const response=await fetch('/api/recordings/report/excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({report,directory:btsDirectoryPath.trim()||undefined})});
+      if(!response.ok){const data=await response.json();throw new Error(data.error);}
+      if(btsDirectoryPath.trim()){const data=await response.json();setBtsLastSaved(`Relatório Excel salvo: ${data.file}`);}
+      else {
+        const blob=await response.blob();const xlsxName=`dccp-bts-${stamp}.xlsx`;
+        if (btsDirectory) {
         const permission = await btsDirectory.requestPermission?.({ mode: "readwrite" });
         if (permission && permission !== "granted") throw new Error("Permissão de gravação recusada.");
-        const write = async (name: string, content: string) => {
-          const file = await btsDirectory.getFileHandle(name, { create: true });
+          const file = await btsDirectory.getFileHandle(xlsxName, { create: true });
           const writable = await file.createWritable();
-          await writable.write(content);
+          await writable.write(blob);
           await writable.close();
-        };
-        await write(jsonName, json);
-        await write(csvName, csv);
-        setBtsLastSaved(`Salvos no HD: ${jsonName} e ${csvName}`);
-      } else {
-        downloadTextFile(jsonName, json, "application/json;charset=utf-8");
-        downloadTextFile(csvName, csv, "text/csv;charset=utf-8");
-        setBtsLastSaved(`Baixados: ${jsonName} e ${csvName}`);
+          setBtsLastSaved(`Relatório Excel salvo em ${btsDirectory.name}: ${xlsxName}`);
+        }else{
+          const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=xlsxName;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+          setBtsLastSaved(`Relatório Excel baixado: ${xlsxName}`);
+        }
       }
     } catch (error) {
       downloadTextFile(jsonName, json, "application/json;charset=utf-8");
       downloadTextFile(csvName, csv, "text/csv;charset=utf-8");
-      setBtsLastSaved(`Falha ao gravar no HD; arquivos baixados como alternativa. ${String(error)}`);
+      setBtsLastSaved(`Falha ao gerar ou salvar Excel; JSON e CSV baixados como alternativa. ${String(error)}`);
     } finally {
       setBtsSaving(false);
     }
@@ -2571,7 +2591,9 @@ export default function MonitorAoVivo() {
         checks={btsChecks}
         sourceName={source?.nome ?? "—"}
         selectedProgram={selectedProgramName}
-        directoryName={btsDirectory?.name ?? null}
+        directoryName={btsDirectoryPath.trim()||btsDirectory?.name||null}
+        directoryPath={btsDirectoryPath}
+        onDirectoryPath={path=>{setBtsDirectoryPath(path);localStorage.setItem('dccp-report-directory',path);}}
         onChooseDirectory={() => { void chooseBtsDirectory(); }}
         onGenerate={() => { void generateBtsReport(); }}
         saving={btsSaving}

@@ -2,12 +2,34 @@ import { Router } from 'express';
 import { createReadStream } from 'node:fs';
 import { once } from 'node:events';
 import { basename } from 'node:path';
+import { isAbsolute, resolve, join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { createBtsWorkbook } from '../lib/bts-report';
 import { recordingInfo } from '../lib/recording-info';
 import {exportFormats,exportProfiles,startConversion,conversionJob} from '../lib/conversions';
 import { configureChannel, status, getRecording, initRecordings, protectRecordings, deleteRecordings, updateRecordingCaption } from '../lib/recordings';
 const router = Router();
 router.use(async (_req, _res, next) => { try { await initRecordings(); next(); } catch(error) { next(error); } });
 router.get('/', (_req,res) => res.json(status()));
+router.post('/report/excel',async(req,res)=>{
+  try{const {report,directory}=req.body;if(!report||!Array.isArray(report.auditoria))throw new Error('Relatório inválido.');
+    const buffer=await createBtsWorkbook(report);const name=`dccp-bts-${new Date().toISOString().replace(/[:.]/g,'-')}.xlsx`;
+    if(directory){if(typeof directory!=='string'||!isAbsolute(directory))throw new Error('Informe uma pasta absoluta.');await mkdir(resolve(directory),{recursive:true});const path=join(resolve(directory),name);await writeFile(path,buffer,{flag:'wx'});res.json({file:path});}
+    else{res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${name}"`);res.send(buffer);}
+  }catch(error){res.status(400).json({error:error instanceof Error?error.message:String(error)});}
+});
+router.post('/report',async(req,res)=>{
+  try{
+    const {directory,json,csv}=req.body;
+    if(typeof directory!=='string'||!isAbsolute(directory)||typeof json!=='string'||typeof csv!=='string')throw new Error('Informe uma pasta absoluta e o relatório.');
+    JSON.parse(json);
+    const destination=resolve(directory);await mkdir(destination,{recursive:true});
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-');const prefix=`dccp-bts-${stamp}`;
+    const files=[join(destination,`${prefix}.json`),join(destination,`${prefix}.csv`)];
+    await writeFile(files[0],json,{encoding:'utf8',flag:'wx'});await writeFile(files[1],csv,{encoding:'utf8',flag:'wx'});
+    res.json({directory:destination,files});
+  }catch(error){res.status(400).json({error:error instanceof Error?error.message:String(error)});}
+});
 router.post('/caption',async(req,res)=>{try{await updateRecordingCaption(req.body.text);res.json({ok:true});}catch(error){res.status(400).json({error:String(error)});}});
 router.get('/formats',(_req,res)=>res.json({formats:exportFormats,profiles:exportProfiles}));
 router.delete('/files',async(req,res)=>{
