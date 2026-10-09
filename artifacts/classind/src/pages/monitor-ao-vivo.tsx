@@ -20,9 +20,9 @@ import Hls from "hls.js";
 
 // ─── Sistema ──────────────────────────────────────────────────────────────────
 
-const SISTEMA = "DC CENSURA PRO";
-const AUTOR = "Engenheiro Dário Canuto";
-const SISTEMA_FULL = `${SISTEMA} - ${AUTOR}`;
+const SISTEMA = "SERVER DTV+ CENSURA PRO";
+const AUTOR = "SERVER DTV+";
+const SISTEMA_FULL = SISTEMA;
 
 const CC_LINES = [
   `${SISTEMA_FULL} — Monitoramento de Broadcast`,
@@ -2068,10 +2068,9 @@ export default function MonitorAoVivo() {
         {/* Back */}
 
         <div className="w-px h-5 bg-[#2a3050] shrink-0"/>
-        <Monitor className="h-4 w-4 text-teal-400 shrink-0"/>
+        <img src={`${import.meta.env.BASE_URL}server-dtv-logo.png`} alt="SERVER DTV+" className="h-12 w-12 object-contain shrink-0 rounded"/>
         <div className="flex flex-col shrink-0">
           <span className="text-sm font-bold text-white leading-tight">{SISTEMA}</span>
-          <span className="text-[10px] text-gray-500 leading-tight">{AUTOR}</span>
         </div>
          <span className="text-xs text-gray-600 border-l border-gray-700 pl-2 shrink-0 hidden xl:block max-w-[420px] truncate" title={srtHeaderDetails}>{srtHeaderDetails}</span>
         <div className="flex-1"/>

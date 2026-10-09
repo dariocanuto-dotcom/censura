@@ -51,7 +51,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="h-14 border-b bg-card flex items-center px-6 shrink-0">
-          <h1 className="font-medium text-sm text-muted-foreground">DC CENSURA PRO — Engenheiro Dário Canuto</h1>
+          <h1 className="font-medium text-sm text-muted-foreground">SERVER DTV+ CENSURA PRO</h1>
         </header>
         <div className="flex-1 overflow-auto p-6">
           <div className="mx-auto max-w-6xl">
