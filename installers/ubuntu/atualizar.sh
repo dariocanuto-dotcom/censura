@@ -54,6 +54,14 @@ test -s "$STAGE/artifacts/classind/dist/public/index.html"
 echo '[3/4] Aplicando atualização…'
 STOPPED=1
 systemctl stop server-dtv
+if [[ -d "$BASE/app/.runtime/recording-service" && ! -L "$BASE/app/.runtime" ]]; then
+  echo 'Preservando o estado de gravação de uma instalação com .runtime local…'
+  if [[ -e "$STATE/recording-service" ]]; then
+    mv -- "$STATE/recording-service" "$BASE/backups/recording-state-$STAMP"
+  fi
+  cp -a -- "$BASE/app/.runtime/recording-service" "$STATE/recording-service"
+  chown -R server-dtv:server-dtv "$STATE/recording-service"
+fi
 mv -- "$BASE/app" "$BACKUP"
 if ! mv -- "$STAGE" "$BASE/app"; then mv -- "$BACKUP" "$BASE/app"; rollback; fi
 SWITCHED=1
