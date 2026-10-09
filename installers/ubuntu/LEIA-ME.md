@@ -18,6 +18,18 @@ Configure as entradas SRT novamente no navegador do Ubuntu. O modo PVW com CC re
 
 ## Operação
 
+## Atualizar uma instalação existente
+
+Extraia o pacote atualizado em uma pasta separada e execute nela:
+
+```bash
+sudo bash atualizar.sh
+```
+
+A atualização compila o código antes de parar o serviço. Preserva o banco, `/etc/server-dtv/server-dtv.env`, o SDK NDI e as gravações. Guarda o código anterior e o restaura se a nova versão não responder. Não execute `instalar.sh` para atualizar.
+
+Novas pastas seguem `TV_Feliz_HD_102026/TV_Feliz_HD_09102026/09102026_16h40.mp4`. O horário usa Brasília. Blocos iniciados no mesmo minuto recebem `_02`, `_03` etc., evitando sobrescrita.
+
 ```bash
 sudo systemctl status server-dtv
 sudo systemctl restart server-dtv

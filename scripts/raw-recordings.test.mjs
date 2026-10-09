@@ -23,3 +23,29 @@ for(const width of [188,192,204])test(`preserva todos os bytes e PIDs BTS de ${w
   await captureTransport(Readable.from(chunks),root,10,()=>{},async file=>files.push(file),'TV_');
   assert.equal(files.length,1);assert.deepEqual(await readFile(files[0].path),input);assert.equal(files[0].bytes,input.length);
 });
+
+test('BTS troca pasta mensal na virada do mês em Brasília',async()=>{
+  let now=Date.parse('2026-11-01T02:59:59Z');
+  const packet=Buffer.alloc(188,0xff);packet[0]=0x47;const data=Buffer.concat(Array(5).fill(packet));
+  let advance;const active=new Promise(done=>advance=done);
+  async function* input(){yield data;await active;now+=2000;yield data;}
+  const root=await mkdtemp(join(resolve('.runtime'),'month-test-'));const files=[];
+  const monthly=date=>join(root,new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',month:'2-digit',year:'numeric'}).format(date).replace('/',''));
+  await captureTransport(Readable.from(input()),monthly,1,block=>{if(block)advance();},async file=>files.push(file),'TV_',()=>now);
+  assert.equal(files.length,2);
+  assert.ok(files[0].path.startsWith(join(root,'102026','TV_31102026')));
+  assert.ok(files[1].path.startsWith(join(root,'112026','TV_01112026')));
+  assert.deepEqual(Buffer.concat(await Promise.all(files.map(file=>readFile(file.path)))),Buffer.concat([data,data]));
+});
+
+import {recordingFileName,finalizeRecording} from '../artifacts/api-server/src/lib/recording-file.ts';
+import {writeFile} from 'node:fs/promises';
+test('nome do bloco usa data e hora, sem substituir bloco existente',async()=>{
+  assert.equal(recordingFileName(new Date('2026-10-09T19:40:00Z'),'mp4'),'09102026_16h40.mp4');
+  const root=await mkdtemp(join(resolve('.runtime'),'file-name-test-'));
+  const target=join(root,'09102026_16h40.mp4');
+  await writeFile(target,'primeiro');await writeFile(join(root,'pending.mp4'),'segundo');
+  const result=await finalizeRecording(join(root,'pending.mp4'),target);
+  assert.equal(result,join(root,'09102026_16h40_02.mp4'));
+  assert.equal(await readFile(target,'utf8'),'primeiro');assert.equal(await readFile(result,'utf8'),'segundo');
+});

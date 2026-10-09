@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { channelSlug, dayName, validateChannel, retentionCandidates, recordingArgs, resolveSegmentPath, blockEnd } from '../artifacts/api-server/src/lib/recordings.ts';
+import { channelSlug, dayName, validateChannel, retentionCandidates, recordingArgs, resolveSegmentPath, recordingRoot, blockEnd } from '../artifacts/api-server/src/lib/recordings.ts';
 import { resolve } from 'node:path';
 const base={id:'1',name:'TV Feliz',url:'srt://127.0.0.1:9999',directory:process.cwd(),enabled:false,codec:'h264',format:'mp4',videoKbps:1000,audioKbps:64,retentionDays:30,blockMinutes:10,width:1920,height:1080};
 test('progresso considera primeiro bloco parcial e limite do agendamento',()=>{const start=Date.parse('2026-10-08T22:01:35Z');assert.equal(new Date(blockEnd(start,2)).toISOString(),'2026-10-08T22:02:00.000Z');assert.equal(new Date(blockEnd(start,2,'2026-10-08T22:01:50Z')).toISOString(),'2026-10-08T22:01:50.000Z');assert.equal(new Date(blockEnd(Date.parse('2026-10-08T22:02:00Z'),2)).toISOString(),'2026-10-08T22:04:00.000Z');});
-test('CSV de FFmpeg é localizado na pasta diária gerenciada',()=>{assert.equal(resolveSegmentPath(base,'0810202622h20_00.mp4'),resolve(base.directory,'DC-Censura-1-TV_Feliz','TV_Feliz_08102026','0810202622h20_00.mp4'));assert.equal(resolveSegmentPath(base,'../../state.json'),null);});
+test('CSV de FFmpeg é localizado na pasta diária gerenciada',()=>{assert.equal(resolveSegmentPath(base,'0810202622h20_00.mp4'),resolve(base.directory,'TV_Feliz_102026','TV_Feliz_08102026','0810202622h20_00.mp4'));assert.equal(resolveSegmentPath(base,'../../state.json'),null);});
 test('nome de canal não permite caminhos externos',()=>assert.equal(channelSlug('../TV Feliz/'), 'TV_Feliz'));
 test('pasta usa dia brasileiro na virada UTC',()=>assert.equal(dayName(new Date('2026-10-09T01:00:00Z')),'08102026'));
 test('rejeita terceiro canal, resolução além de Full HD e retenção além de 90 dias',()=>{for(const patch of [{id:'2'},{width:3840},{retentionDays:91}])assert.throws(()=>validateChannel({...base,...patch}));});
@@ -28,4 +28,12 @@ test('NDI nativo aceita gravação comprimida e rejeita BTS original',()=>{
   const config=validateChannel({...base,url:'ndi://source/Studio%20(Canal)',codec:'h265'});
   assert.equal(config.url,'ndi://source/Studio%20(Canal)');
   assert.throws(()=>validateChannel({...base,url:config.url,codec:'copy',format:'ts'}),/requer gravação/);
+});
+
+test('pasta mensal usa mês e ano brasileiros na virada UTC',()=>{
+ assert.equal(recordingRoot(base,new Date('2026-11-01T01:00:00Z')),resolve(base.directory,'TV_Feliz_102026'));
+ assert.equal(recordingRoot(base,new Date('2026-11-01T03:00:00Z')),resolve(base.directory,'TV_Feliz_112026'));
+ const name='12345678-1234-1234-1234-123456789abc_000000001.mp4';
+ assert.equal(resolveSegmentPath(base,resolve(base.directory,'TV_Feliz_102026','.pending',name)),resolve(base.directory,'TV_Feliz_102026','.pending',name));
+ assert.equal(resolveSegmentPath(base,resolve(base.directory,'../TV_Feliz_102026','.pending',name)),null);
 });

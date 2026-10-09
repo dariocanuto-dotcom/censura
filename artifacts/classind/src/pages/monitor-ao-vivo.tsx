@@ -1386,7 +1386,7 @@ export default function MonitorAoVivo() {
     }
     return null;
   }, [source]);
-  const recordingInput={name:source?.nome??'Entrada',url:sourceStreamUrl()??'',programId:source?.tipo==='srt'?srtProgramBySource[source.id]:undefined};
+  const recordingInput={name:(srtProbe?.ok?srtProbe.canal?.nome:undefined)||source?.nome||'Entrada',url:sourceStreamUrl()??'',programId:source?.tipo==='srt'?srtProgramBySource[source.id]:undefined};
   useEffect(()=>{
     const channel=recordingService.channels.find((c:any)=>c.id==='1');
     if(!channel?.enabled||(channel.url===recordingInput.url&&channel.name===recordingInput.name&&channel.programId===recordingInput.programId))return;

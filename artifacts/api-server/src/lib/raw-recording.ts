@@ -1,5 +1,6 @@
+import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -10,14 +11,14 @@ export function packetSize(buffer:Buffer) {
   }
   return null;
 }
-export async function captureTransport(input:Readable,root:string,minutes:number,onActive:(block:{name:string;start:string;end:string;bytes:number}|undefined)=>void,onComplete:(file:{path:string;start:string;end:string;bytes:number})=>Promise<void>,prefix='',now=Date.now) {
+export async function captureTransport(input:Readable,root:string|((date:Date)=>string),minutes:number,onActive:(block:{name:string;start:string;end:string;bytes:number}|undefined)=>void,onComplete:(file:{path:string;start:string;end:string;bytes:number})=>Promise<void>,prefix='',now=Date.now) {
   let pending=Buffer.alloc(0),size:number|null=null;
   let output:ReturnType<typeof createWriteStream>|undefined;
   let filePath='',finalPath='',start=0,end=0,bytes=0;
   const close=async()=>{
     if(!output)return;
     const finished=once(output,'finish');output.end();await finished;
-    await rename(filePath,finalPath);
+    finalPath=await finalizeRecording(filePath,finalPath);
     await onComplete({path:finalPath,start:new Date(start).toISOString(),end:new Date(now()).toISOString(),bytes});
     output=undefined;onActive(undefined);
   };
@@ -26,9 +27,9 @@ export async function captureTransport(input:Readable,root:string,minutes:number
     const parts=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hourCycle:'h23',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(start);
     const p=(key:string)=>parts.find(x=>x.type===key)!.value;
     const day=p('day')+p('month')+p('year');
-    const folder=join(root,`${prefix}${day}`);await mkdir(folder,{recursive:true});
-    const name=`${day}${p('hour')}h${p('minute')}_${p('second')}_${randomUUID().slice(0,8)}.ts`;
-    finalPath=join(folder,name);filePath=finalPath+'.partial';output=createWriteStream(filePath,{flags:'wx'});
+    const folder=join(typeof root==='function'?root(new Date(start)):root,`${prefix}${day}`);await mkdir(folder,{recursive:true});
+    const name=recordingFileName(new Date(start),'ts');
+    finalPath=join(folder,name);filePath=finalPath+`_${randomUUID().slice(0,8)}.partial`;output=createWriteStream(filePath,{flags:'wx'});
     output.on('error',()=>{});
   };
   try {

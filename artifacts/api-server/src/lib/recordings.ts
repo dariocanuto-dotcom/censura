@@ -1,3 +1,4 @@
+import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { startNdi, stopNdi } from './ndi.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile, writeFile, rename, stat, statfs, unlink, readdir } from 'node:fs/promises';
@@ -14,7 +15,7 @@ export interface ChannelConfig {
 }
 export interface RecordingFile { id: string; channelId: string; channel: string; path: string; start: string; end: string; bytes: number; codec: string; format: string; programId?:number }
 interface Store { channels: ChannelConfig[]; files: RecordingFile[]; audit: { time: string; channelId: string; action: string; detail: string }[] }
-interface Running { ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
+interface Running { root?: string; ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
 const stateDir = resolve('.runtime/recording-service');
 const stateFile = join(stateDir, 'state.json');
 let state: Store = { channels: [], files: [], audit: [] };
@@ -82,26 +83,32 @@ async function initializeRecordings() {
   for (const config of state.channels) await ingest({ config, csv: join(stateDir, `channel-${config.id}.csv`), started: 0, seen: new Set(), error: '', stopping: true } as Running);
   state.channels=state.channels.filter(c=>c.id==='1');
   for(const config of state.channels) {
-    const root=resolve(config.directory,`DC-Censura-${config.id}-${channelSlug(config.name)}`);
+    const legacy=resolve(config.directory,`DC-Censura-${config.id}-${channelSlug(config.name)}`);
+    const monthly=(await readdir(config.directory,{withFileTypes:true}).catch(()=>[])).filter(entry=>entry.isDirectory()&&new RegExp(`^${channelSlug(config.name)}_(0[1-9]|1[0-2])\\d{4}$`).test(entry.name)).map(entry=>join(config.directory,entry.name));
+    for(const root of [legacy,...monthly]) {
     for(const folder of await readdir(root,{withFileTypes:true}).catch(()=>[])) {
       if(!folder.isDirectory()||!folder.name.startsWith(`${channelSlug(config.name)}_`))continue;
       for(const name of await readdir(join(root,folder.name))) {
-        if(!/^\d{8}\d{2}h\d{2}_\d{2}_[a-f0-9]{8}\.ts(?:\.partial)?$/.test(name))continue;
+        if(!/^\d{8}(?:_?\d{2}h\d{2}_\d{2}_[a-f0-9]{8}\.ts(?:\.partial)?|_\d{2}h\d{2}(?:_\d+)?\.ts(?:_[a-f0-9]{8}\.partial)?)$/.test(name))continue;
         let path=join(root,folder.name,name);const info=await stat(path);if(!info.isFile()||!info.size)continue;
-        if(name.endsWith('.partial')){const destination=path.slice(0,-8);await rename(path,destination);path=destination;}
+        if(name.endsWith('.partial')){const destination=path.replace(/(?:_[a-f0-9]{8})?\.partial$/,'');path=await finalizeRecording(path,destination);}
         if(state.files.some(file=>file.path===path))continue;
         state.files.push({id:randomUUID(),channelId:'1',channel:config.name,path,start:info.birthtime.toISOString(),end:info.mtime.toISOString(),bytes:info.size,codec:'copy',format:'ts'});
       }
     }
   }
+  }
   timer = setInterval(() => { void tick().catch(error => audit('system', 'error', String(error))); }, 5000);
   timer.unref();
   await tick();
 }
+export function recordingRoot(config: ChannelConfig, date = new Date()) {
+  const day = dayName(date);
+  return resolve(config.directory, `${channelSlug(config.name)}_${day.slice(2)}`);
+}
 async function dailyFolders(config: ChannelConfig) {
-  const root = join(config.directory, `DC-Censura-${config.id}-${channelSlug(config.name)}`);
+  const root = recordingRoot(config);
   await mkdir(join(root, '.pending'), { recursive: true });
-  for (let i = 0; i < 3; i++) await mkdir(join(root, `${channelSlug(config.name)}_${dayName(new Date(Date.now() + i * 86400000))}`), { recursive: true });
   return root;
 }
 export function recordingArgs(config: ChannelConfig, root: string, csv: string) {
@@ -136,7 +143,7 @@ async function start(config: ChannelConfig) {
   // The data demuxer copies transport bytes without rebuilding SI tables or PIDs.
   const args = raw ? ['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url,'-map','0:0','-c','copy','-f','data','pipe:1'] : recordingArgs({...config,url}, root, csv);
   const proc = spawn('ffmpeg', args, { windowsHide: true, env: { ...process.env, TZ: 'BRT3' }, stdio: ['pipe',raw?'pipe':'ignore','pipe'] });
-  const item: Running = { ndi, process: proc, config, csv, started: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
+  const item: Running = { root, ndi, process: proc, config, csv, started: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
   running.set(config.id, item);
   if(ndi) {
     ndi.stdout.pipe(proc.stdin!);
@@ -145,7 +152,7 @@ async function start(config: ChannelConfig) {
     ndi.on('close', () => proc.stdin?.end());
     proc.once('close', () => stopNdi(ndi));
   }
-  if(raw) item.rawCompletion=captureTransport(proc.stdout!,root,config.blockMinutes??10,block=>{item.activeBlock=block;},async file=>{
+  if(raw) item.rawCompletion=captureTransport(proc.stdout!,date=>recordingRoot(config,date),config.blockMinutes??10,block=>{item.activeBlock=block;},async file=>{
     state.files.push({...file,id:randomUUID(),channelId:config.id,channel:config.name,programId:config.programId,codec:'copy',format:'ts'});await save();
   },`${channelSlug(config.name)}_`).catch(error=>{item.error=String(error);lastErrors.set(config.id,item.error);proc.kill();});
   proc.stdin?.on('error', () => {});
@@ -176,11 +183,22 @@ function csvRows(text: string): string[][] {
   });
 }
 export function resolveSegmentPath(config: ChannelConfig, filename: string) {
-  const name = basename(filename.replace(/\\/g, '/'));
-  const root = resolve(config.directory, `DC-Censura-${config.id}-${channelSlug(config.name)}`);
-  if (/^[a-f0-9-]{36}_\d{9}\.(mp4|mkv)$/.test(name)) return join(root, '.pending', name);
-  if (!/^\d{8}\d{2}h\d{2}_\d{2}\.(mp4|mkv)$/.test(name)) return null;
-  return resolve(config.directory, `DC-Censura-${config.id}-${channelSlug(config.name)}`, `${channelSlug(config.name)}_${name.slice(0,8)}`, name);
+  const normalized = filename.replace(/\\/g, '/');
+  const name = basename(normalized);
+  if (/^[a-f0-9-]{36}_\d{9}\.(mp4|mkv)$/.test(name)) {
+    if(isAbsolute(normalized)) {
+      const candidate=resolve(normalized);
+      const legacy=resolve(config.directory,`DC-Censura-${config.id}-${channelSlug(config.name)}`,'.pending',name);
+      if(candidate===legacy)return candidate;
+      const parent=basename(resolve(candidate,'../..'));
+      if(!new RegExp(`^${channelSlug(config.name)}_(0[1-9]|1[0-2])\\d{4}$`).test(parent))return null;
+      const expected=resolve(config.directory,parent,'.pending',name);
+      return candidate===expected?candidate:null;
+    }
+    return join(recordingRoot(config), '.pending', name);
+  }
+  if (!/^\d{8}(?:\d{2}h\d{2}_\d{2}|_\d{2}h\d{2}(?:_\d+)?)\.(mp4|mkv)$/.test(name)) return null;
+  return resolve(config.directory, `${channelSlug(config.name)}_${name.slice(2,8)}`, `${channelSlug(config.name)}_${name.slice(0,8)}`, name);
 }
 async function ingest(item: Running) {
   const text = await readFile(item.csv,'utf8').catch(() => '');
@@ -188,20 +206,19 @@ async function ingest(item: Running) {
     if (!filename || !Number.isFinite(Number(to)) || item.seen.has(filename)) continue;
     let path = resolveSegmentPath(item.config, filename);
     if (!path || state.files.some(file => file.path === path)) continue;
-    const match = /(?:^|[\\/])(\d{2})(\d{2})(\d{4})(\d{2})h(\d{2})_(\d{2})\.(mp4|mkv)$/.exec(path);
+    const modern = /(?:^|[\\/])(\d{2})(\d{2})(\d{4})_(\d{2})h(\d{2})(?:_\d+)?\.(mp4|mkv)$/.exec(path);
+    const match = modern ? [...modern.slice(0,6),'00',modern[6]] : /(?:^|[\\/])(\d{2})(\d{2})(\d{4})(\d{2})h(\d{2})_(\d{2})\.(mp4|mkv)$/.exec(path);
     item.seen.add(filename);
     try {
       const info = await stat(path); if (!info.isFile()) continue;
       const startTime = match ? Date.parse(`${match[3]}-${match[2]}-${match[1]}T${match[4]}:${match[5]}:${match[6]}-03:00`) : info.birthtimeMs;
       if (!match) {
         const date = new Date(startTime);
-        const parts = new Intl.DateTimeFormat('pt-BR', {timeZone:'America/Sao_Paulo',hourCycle:'h23',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(date);
-        const part = (key: string) => parts.find(p=>p.type===key)!.value;
         const day = dayName(date);
-        const folder = resolve(item.config.directory, `DC-Censura-${item.config.id}-${channelSlug(item.config.name)}`, `${channelSlug(item.config.name)}_${day}`);
+        const folder = join(recordingRoot(item.config,date), `${channelSlug(item.config.name)}_${day}`);
         await mkdir(folder,{recursive:true});
-        const destination = join(folder, `${day}${part('hour')}h${part('minute')}_${part('second')}_${basename(path).slice(0,8)}_${basename(path).slice(37,46)}.${item.config.format}`);
-        await rename(path, destination); path = destination;
+        const destination = join(folder, recordingFileName(date,item.config.format));
+        path = await finalizeRecording(path,destination);
       }
       state.files.push({ id: randomUUID(), path, channelId: item.config.id, channel: item.config.name, start: new Date(startTime).toISOString(), end: new Date(startTime + Math.max(0, Number(to)-Number(from)) * 1000).toISOString(), bytes: info.size, codec: item.config.codec, format: item.config.format });
       item.seen.add(filename);
@@ -215,14 +232,13 @@ export function blockEnd(start: number, minutes: number, scheduleEnd?: string) {
   return scheduleEnd ? Math.min(boundary,Date.parse(scheduleEnd)) : boundary;
 }
 async function updateActiveBlock(item: Running) {
-  const folder=resolve(item.config.directory,`DC-Censura-${item.config.id}-${channelSlug(item.config.name)}`,'.pending');
+  const folder=join(item.root ?? recordingRoot(item.config),'.pending');
   const names=(await readdir(folder)).filter(name=>item.prefix&&name.startsWith(item.prefix)&&!item.seen.has(name)).sort();
   const name=names.at(-1);
   if(!name){item.activeBlock=undefined;return;}
   const info=await stat(join(folder,name)).catch(()=>null);if(!info)return;
   const date=new Date(info.birthtimeMs);
-  const time=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hourCycle:'h23',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(date).replace(':','h').replace(':','_');
-  item.activeBlock={name:`${dayName(date)}${time}.${item.config.format}`,start:date.toISOString(),end:new Date(blockEnd(info.birthtimeMs,item.config.blockMinutes??2,item.config.endAt)).toISOString(),bytes:info.size};
+  item.activeBlock={name:recordingFileName(date,item.config.format),start:date.toISOString(),end:new Date(blockEnd(info.birthtimeMs,item.config.blockMinutes??2,item.config.endAt)).toISOString(),bytes:info.size};
 }
 async function removeManaged(file: RecordingFile, reason: string) {
   if (protectedFiles.has(file.id)) return;
