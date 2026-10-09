@@ -8,7 +8,7 @@ const input='w-full bg-[#1a1f2e] border border-[#2a3050] rounded p-2 text-xs tex
 function ChannelForm({id,initial,onSaved,inputSource}:{id:string;initial?:Channel;onSaved:()=>void;inputSource:{name:string;url:string;programId?:number}}) {
   const [draft,setDraft]=useState<Channel>(initial ?? {id,name:`Canal ${id}`,url:'',directory:'D:\\DC-Censura\\Gravacoes',enabled:false,codec:'copy',format:'ts',videoKbps:384,audioKbps:64,retentionDays:30,blockMinutes:10,width:640,height:360});
   const [message,setMessage]=useState(''); const [saving,setSaving]=useState(false);
-  useEffect(()=>{setDraft(d=>({...d,...inputSource}));},[inputSource.name,inputSource.url,inputSource.programId]);
+  useEffect(()=>{setDraft(d=>d.enabled?d:{...d,...inputSource});},[inputSource.name,inputSource.url,inputSource.programId]);
   const [drives,setDrives]=useState<{DeviceID:string;VolumeName:string;FreeSpace:number}[]>([]);
   const scan=async()=>{try{const response=await fetch('/api/dispositivos/local-hardware');const data=await response.json();if(!response.ok||data.erro)throw new Error(data.erro||'Falha ao localizar HDs');setDrives(data.drives);}catch(error){setMessage(String(error));}};
   const field=(key:keyof Channel,value:any)=>setDraft(d=>({...d,[key]:value}));
@@ -30,7 +30,7 @@ function ChannelForm({id,initial,onSaved,inputSource}:{id:string;initial?:Channe
       </>}
       <label>Entrada selecionada<input className={input} value={draft.name} readOnly/></label>
       <label>Pasta / HD<input className={input} value={draft.directory} onChange={e=>field('directory',e.target.value)}/></label>
-      <p className="col-span-2 text-gray-400">A gravação acompanha a fonte escolhida no monitor. Para trocar a fonte, use Entradas.</p>
+      <p className="col-span-2 text-gray-400">A entrada é definida ao iniciar a gravação. Para trocar, pare a gravação, escolha outra entrada e inicie novamente.</p>
       <label>Retenção · dias<input className={input} type="number" min={1} max={90} value={draft.retentionDays} onChange={e=>field('retentionDays',Number(e.target.value))}/></label>
       <label>Duração dos blocos<select className={input} value={draft.blockMinutes??2} onChange={e=>field('blockMinutes',Number(e.target.value))}>{[1,2,5,10].map(m=><option key={m} value={m}>{m} minuto(s)</option>)}</select></label>
       <label className="flex items-center gap-2"><input type="checkbox" checked={draft.enabled} onChange={e=>field('enabled',e.target.checked)}/>Ativar gravação automática</label>

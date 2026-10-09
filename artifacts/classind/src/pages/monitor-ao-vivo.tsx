@@ -1387,13 +1387,7 @@ export default function MonitorAoVivo() {
     return null;
   }, [source]);
   const recordingInput={name:(srtProbe?.ok?srtProbe.canal?.nome:undefined)||source?.nome||'Entrada',url:sourceStreamUrl()??'',programId:source?.tipo==='srt'?srtProgramBySource[source.id]:undefined};
-  useEffect(()=>{
-    const channel=recordingService.channels.find((c:any)=>c.id==='1');
-    if(!channel?.enabled||(channel.url===recordingInput.url&&channel.name===recordingInput.name&&channel.programId===recordingInput.programId))return;
-    let cancelled=false;
-    void fetch('/api/recordings/channels/1',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...channel,...recordingInput,url:recordingInput.url||channel.url,enabled:Boolean(recordingInput.url)})}).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error);if(!cancelled){setRecordingService(data);setRecording(data.channels.some((c:any)=>c.running));}}).catch(error=>console.error('Falha ao acompanhar entrada na gravação',error));
-    return()=>{cancelled=true;};
-  },[recordingInput.url,recordingInput.name,recordingInput.programId,recordingService.channels[0]?.enabled,recordingService.channels[0]?.url,recordingService.channels[0]?.name,recordingService.channels[0]?.programId]);
+
 
   // ── ARIB CC capture ─────────────────────────────────────────────────────────
   const lerAribCC = useCallback(async (durationSec = 15) => {
