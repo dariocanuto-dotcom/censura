@@ -1,3 +1,4 @@
+import { startNdi, stopNdi } from './ndi.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile, writeFile, rename, stat, statfs, unlink, readdir } from 'node:fs/promises';
 import { join, resolve, isAbsolute, basename } from 'node:path';
@@ -13,7 +14,7 @@ export interface ChannelConfig {
 }
 export interface RecordingFile { id: string; channelId: string; channel: string; path: string; start: string; end: string; bytes: number; codec: string; format: string; programId?:number }
 interface Store { channels: ChannelConfig[]; files: RecordingFile[]; audit: { time: string; channelId: string; action: string; detail: string }[] }
-interface Running { process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
+interface Running { ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
 const stateDir = resolve('.runtime/recording-service');
 const stateFile = join(stateDir, 'state.json');
 let state: Store = { channels: [], files: [], audit: [] };
@@ -48,7 +49,8 @@ export function validateChannel(input: ChannelConfig): ChannelConfig {
   if (input.id !== '1') throw new Error('A gravação utiliza somente um canal.');
   if (!input.name?.trim() || !input.directory || !isAbsolute(input.directory)) throw new Error('Informe nome do canal e pasta absoluta no HD.');
   const url = new URL(input.url);
-  if (!['srt:','udp:','rtp:'].includes(url.protocol)) throw new Error('Fonte deve ser SRT, UDP ou RTP.');
+  if (!['srt:','udp:','rtp:','rtsp:','rtsps:','ndi:'].includes(url.protocol)) throw new Error('Fonte deve ser SRT, UDP, RTP ou RTSP.');
+  if (input.codec === 'copy' && (url.protocol.startsWith('rtsp') || url.protocol === 'ndi:')) throw new Error('RTSP/NDI requer gravação H.264 ou H.265. BTS original exige MPEG-TS por SRT/UDP.');
   if (!Number.isInteger(input.retentionDays) || input.retentionDays < 1 || input.retentionDays > 90) throw new Error('Retenção deve ser de 1 a 90 dias.');
   if (!['copy','h264','h265'].includes(input.codec) || !(input.codec === 'copy' ? input.format === 'ts' : ['mp4','mkv'].includes(input.format))) throw new Error('Use TS para BTS original ou MP4/MKV para H.264 e H.265.');
   if(input.captureMode!==undefined&&!['source','pvw'].includes(input.captureMode))throw new Error('Modo de gravação inválido.');
@@ -111,6 +113,7 @@ export function recordingArgs(config: ChannelConfig, root: string, csv: string) 
   const pvw=config.captureMode==='pvw';
   const captionFont=process.platform==='win32'?"C\\:/Windows/Fonts/consola.ttf":'/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf';
   return ['-hide_banner','-loglevel','warning','-probesize','1000000','-analyzeduration','3000000','-rw_timeout','10000000',
+    ...(config.url.startsWith('rtsp') ? ['-rtsp_transport','tcp'] : []),
     '-i',config.url,
     '-map',`${map}:v:0`,'-vf',scale+(pvw?`,drawtext=fontfile='${captionFont}':textfile='.runtime/recording-service/pvw-cc.txt':reload=1:expansion=none:fontsize=w/80:fontcolor=white:box=1:boxcolor=black@0.85:boxborderw=8:x=(w-text_w)/2:y=h-text_h-20`:''),'-map',`${map}:a:0?`,
     '-c:v',config.codec === 'h265' ? 'libx265' : 'libx264','-preset','veryfast','-pix_fmt','yuv420p',
@@ -126,14 +129,22 @@ async function start(config: ChannelConfig) {
   const root = await dailyFolders(config);
   const csv = join(stateDir, `channel-${config.id}.csv`);
   await writeFile(csv, '');
+  const ndi = config.url.startsWith('ndi:') ? await startNdi(decodeURIComponent(new URL(config.url).pathname.slice(1))) : undefined;
   const raw=config.codec==='copy';
-  let url=config.url;
+  let url=ndi ? "pipe:0" : config.url;
   if(url.startsWith('srt:')){const parsed=new URL(url);parsed.searchParams.set('latency',String(Math.max(Number(parsed.searchParams.get('latency'))||0,1000000)));url=parsed.toString();}
   // The data demuxer copies transport bytes without rebuilding SI tables or PIDs.
   const args = raw ? ['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url,'-map','0:0','-c','copy','-f','data','pipe:1'] : recordingArgs({...config,url}, root, csv);
   const proc = spawn('ffmpeg', args, { windowsHide: true, env: { ...process.env, TZ: 'BRT3' }, stdio: ['pipe',raw?'pipe':'ignore','pipe'] });
-  const item: Running = { process: proc, config, csv, started: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
+  const item: Running = { ndi, process: proc, config, csv, started: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
   running.set(config.id, item);
+  if(ndi) {
+    ndi.stdout.pipe(proc.stdin!);
+    ndi.stderr.on('data', value => { item.error=(item.error+value.toString()).slice(-3000); });
+    ndi.on('error', error => { item.error=error.message; proc.kill(); });
+    ndi.on('close', () => proc.stdin?.end());
+    proc.once('close', () => stopNdi(ndi));
+  }
   if(raw) item.rawCompletion=captureTransport(proc.stdout!,root,config.blockMinutes??10,block=>{item.activeBlock=block;},async file=>{
     state.files.push({...file,id:randomUUID(),channelId:config.id,channel:config.name,programId:config.programId,codec:'copy',format:'ts'});await save();
   },`${channelSlug(config.name)}_`).catch(error=>{item.error=String(error);lastErrors.set(config.id,item.error);proc.kill();});
@@ -153,7 +164,7 @@ async function stop(id: string) {
   await new Promise<void>(resolveStop => {
     const timeout = setTimeout(() => { item.process.kill(); }, 10000);
     item.process.once('close', () => { clearTimeout(timeout); resolveStop(); });
-    item.process.stdin?.write('q\n');
+    if(item.ndi) { stopNdi(item.ndi); item.process.stdin?.end(); } else item.process.stdin?.write('q\n');
   });
   if(item.rawCompletion)await item.rawCompletion;else await ingest(item); audit(id,'stop','Gravação encerrada');
 }

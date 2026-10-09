@@ -55,3 +55,10 @@ Thumbs.db
 *.zip
 
 .runtime/
+
+# SDK installers supplied locally; do not publish proprietary SDK packages.
+/installers/Install_NDI_SDK_*.tar.gz
+/installers/NDI*SDK*.exe
+
+__pycache__/
+*.pyc

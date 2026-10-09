@@ -1,3 +1,4 @@
+import { WebRtcInput } from "@/components/webrtc-input";
 import { MultichannelRecordings } from "@/components/multichannel-recordings";
 import { RecordingProgress, type RecordingProgressChannel } from '@/components/recording-progress';
 import { MonitorWorkspace } from "@/components/monitor-workspace";
@@ -55,8 +56,9 @@ interface EpgEvent {
 }
 
 interface SignalSource {
-  id: string; nome: string; tipo: "sdi" | "srt" | "udp"; ativo: boolean;
+  id: string; nome: string; tipo: "sdi" | "srt" | "udp" | "rtsp" | "ndi" | "webrtc"; ativo: boolean;
   sdi?: SdiConfig; srt?: SrtConfig; udp?: UdpConfig;
+  network?: { url: string; bridgeUrl: string; sourceName: string; native?: boolean };
 }
 
 type ScopeTab = "waveform" | "vectorscope" | "histogram" | "bts";
@@ -190,11 +192,12 @@ function csvCell(value: unknown) {
 function srcProtocol(s: SignalSource) {
   if (s.tipo==="sdi") return s.sdi?.deviceName?.split(" ")[0]??"SDI";
   if (s.tipo==="srt") return `SRT ${s.srt?.mode??"caller"}`;
-  return `UDP ${s.udp?.protocol?.toUpperCase()??"UDP"}`;
+  return s.tipo === "udp" ? `UDP ${s.udp?.protocol?.toUpperCase()??"UDP"}` : s.tipo.toUpperCase();
 }
 function srcResolution(s: SignalSource) {
   if (s.tipo==="sdi") return s.sdi?.videoFormat??"—";
   if (s.tipo==="srt") return `${s.srt?.host??""}\:${s.srt?.port??""}`;
+  if(s.tipo!=="udp") return s.tipo === "ndi" ? s.network?.sourceName || "NDI via receptor" : s.tipo.toUpperCase();
   return `${s.udp?.address??""}\:${s.udp?.port??""}`;
 }
 function srcFps(s: SignalSource): number {
@@ -584,6 +587,9 @@ function SourceForm({ source, bmdDevices, bmdLoading, onRefreshBmd, onChange }: 
   source: SignalSource; bmdDevices: BmdDevice[]; bmdLoading: boolean;
   onRefreshBmd: () => void; onChange: (s: SignalSource) => void;
 }) {
+  const [ndiSources, setNdiSources] = useState<{name:string}[]>([]);
+  const [ndiLoading, setNdiLoading] = useState(false);
+  const [ndiError, setNdiError] = useState("");
   const upd = (patch: Partial<SignalSource>) => onChange({ ...source, ...patch });
   const updSdi = (patch: Partial<SdiConfig>) => upd({ sdi: { ...source.sdi!, ...patch } });
   const updSrt = (patch: Partial<SrtConfig>) => upd({ srt: { ...source.srt!, ...patch } });
@@ -599,19 +605,36 @@ function SourceForm({ source, bmdDevices, bmdLoading, onRefreshBmd, onChange }: 
         </FRow>
         <FRow label="Tipo de Entrada">
           <Select value={source.tipo} onValueChange={v => {
-            const tipo = v as "sdi"|"srt"|"udp";
+            const tipo = v as SignalSource["tipo"];
             const base = { ...source, tipo };
             if (tipo==="sdi"&&!base.sdi) base.sdi={ deviceId:"", deviceName:"", portIndex:1, videoFormat:"HD 1080i 59.94", audioChannels:8, linkMode:"single" };
             if (tipo==="srt"&&!base.srt) base.srt={ host:"", port:9000, latencyMs:120, passphrase:"", mode:"caller", streamId:"" };
             if (tipo==="udp"&&!base.udp) base.udp={ address:"239.1.1.1", port:1234, interface:"0.0.0.0", bufferSize:1500000, protocol:"udp" };
+            if (["rtsp","ndi","webrtc"].includes(tipo) && !base.network) base.network={url:"",bridgeUrl:"",sourceName:""};
             onChange(base);
           }}>
             <ST data-testid="sf-tipo"><SelectValue /></ST>
-            <SC>{[["sdi","SDI / Blackmagic"],["srt","SRT"],["udp","UDP / Multicast"]].map(([v,l])=><SI key={v} value={v}>{l}</SI>)}</SC>
+            <SC>{[["sdi","SDI / Blackmagic"],["srt","SRT"],["udp","UDP / Multicast"],["rtsp","RTSP"],["ndi","NDI"],["webrtc","WebRTC / WHEP"]].map(([v,l])=><SI key={v} value={v}>{l}</SI>)}</SC>
           </Select>
         </FRow>
       </div>
 
+      {["rtsp","ndi","webrtc"].includes(source.tipo) && <div className="flex flex-col gap-3">
+        {source.tipo === "ndi" && <>
+          <FRow label="Recepção NDI"><Select value={(source.network?.native ?? !source.network?.url) ? "native" : "gateway"} onValueChange={v=>upd({network:{url:"",bridgeUrl:"",sourceName:"",...source.network,native:v==="native"}})}><ST><SelectValue/></ST><SC><SI value="native">SDK NDI nativo</SI><SI value="gateway">Receptor externo RTSP/SRT</SI></SC></Select></FRow>
+          {(source.network?.native ?? !source.network?.url) && <>
+            <button className="text-xs text-teal-400 text-left" disabled={ndiLoading} onClick={async()=>{setNdiLoading(true);setNdiError("");try{const r=await fetch("/api/srt/ndi/sources");const d=await r.json();setNdiSources(d.sources??[]);if(!d.ok)setNdiError(d.erro??"SDK indisponível.");else if(!d.sources?.length)setNdiError("Nenhuma fonte NDI encontrada na rede.");}catch{setNdiError("Não foi possível consultar o SDK. Reinicie a API atualizada.");}finally{setNdiLoading(false);}}}>{ndiLoading?"Localizando fontes…":"Localizar fontes NDI"}</button>
+            {ndiError && <p className="text-xs text-amber-300">{ndiError}</p>}
+            {ndiSources.map(item=><button key={item.name} className="text-xs text-left text-blue-300" onClick={()=>upd({network:{url:"",bridgeUrl:"",...source.network,native:true,sourceName:item.name}})}>{item.name}</button>)}
+          </>}
+        </>}
+        {source.tipo === "ndi" && <FRow label="Nome da fonte NDI"><Input value={source.network?.sourceName ?? ""} onChange={e=>upd({network:{url:"",bridgeUrl:"",...source.network,sourceName:e.target.value}})} className={iCls}/></FRow>}
+        {(source.tipo !== "ndi" || !(source.network?.native ?? !source.network?.url)) && <FRow label={source.tipo === "ndi" ? "URL RTSP/SRT do receptor NDI" : source.tipo === "webrtc" ? "Endereço WebRTC WHEP" : "Endereço RTSP"}>
+          <Input value={source.network?.url ?? ""} onChange={e=>upd({network:{bridgeUrl:"",sourceName:"",...source.network,url:e.target.value}})} className={iCls} placeholder={source.tipo === "webrtc" ? "http://servidor:8889/canal/whep" : "rtsp://servidor:8554/canal"}/>
+        </FRow>}
+        {source.tipo === "webrtc" && <FRow label="URL RTSP/SRT para gravação (opcional)"><Input value={source.network?.bridgeUrl ?? ""} onChange={e=>upd({network:{url:"",sourceName:"",...source.network,bridgeUrl:e.target.value}})} className={iCls}/></FRow>}
+        <p className="text-xs text-gray-400">{source.tipo === "ndi" ? "A recepção nativa usa o SDK instalado no computador da API. Selecione uma fonte com vídeo e áudio. Para gravar, use H.264 ou H.265." : source.tipo === "webrtc" ? "Recepção WHEP com vídeo e áudio. O servidor deve permitir CORS. Para gravar, informe também a saída RTSP/SRT da mesma fonte." : "Recepção RTSP por TCP. Para gravar, selecione H.264 ou H.265; BTS original requer entrada MPEG-TS."}</p>
+      </div>}
       {/* SDI */}
       {source.tipo === "sdi" && (
         <div className="flex flex-col gap-3">
@@ -1350,6 +1373,8 @@ export default function MonitorAoVivo() {
   // ── Helper: build stream URL from source ────────────────────────────────────
   const sourceStreamUrl = useCallback((): string | null => {
     if (!source) return null;
+    if (source.tipo === "ndi" && (source.network?.native ?? !source.network?.url)) return source.network?.sourceName ? `ndi://source/${encodeURIComponent(source.network.sourceName)}` : null;
+    if (["rtsp","ndi","webrtc"].includes(source.tipo)) return (source.tipo === "webrtc" ? source.network?.bridgeUrl : source.network?.url) || null;
     if (source.tipo === "srt" && source.srt) {
       const p = new URLSearchParams({ mode: source.srt.mode ?? "caller", latency: String((source.srt.latencyMs ?? 120) * 1000) });
       if (source.srt.passphrase) p.set("passphrase", source.srt.passphrase);
@@ -1480,6 +1505,8 @@ export default function MonitorAoVivo() {
   }, []);
   const onSrtAudioAnalysis = useCallback((levels: number[], rmsDb: number, peakDb: number) => {
     const normalized = Array.from({ length: 16 }, (_, index) => levels[index] ?? -60);
+    setAudioMeasured(true);
+    setAudioActive(true);
     setAudioLevels(normalized);
     setPeakLevels(previous => normalized.map((level, index) => Math.max(level, (previous[index] ?? -60) - 0.5)));
     if (loudnessEnabled) {
@@ -1494,6 +1521,9 @@ export default function MonitorAoVivo() {
   useEffect(() => {
     let cancelled = false;
     const currentSource = source;
+    setAribLinhas([]);
+    setAribTemCC(false);
+    setAribDurMs(null);
     setSrtPlaybackUrl(null);
     setSrtVideoState("connecting");
     setSrtPlaybackError(null);
@@ -1503,7 +1533,7 @@ export default function MonitorAoVivo() {
     setLoudnessPeakDb(null);
     srtSessionId.current = null;
 
-    if (!currentSource || currentSource.tipo !== "srt" || !currentSource.srt || !signalActive) return;
+    if (!currentSource || !["srt","rtsp","ndi"].includes(currentSource.tipo) || !signalActive) return;
     const currentSrt = currentSource.srt;
     setSrtProbeLoading(true);
 
@@ -1516,7 +1546,8 @@ export default function MonitorAoVivo() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...currentSrt,
-            captureMetadata: true,
+            ...(currentSource.tipo === "ndi" && (currentSource.network?.native ?? !currentSource.network?.url) ? {ndiSource:currentSource.network?.sourceName ?? ""} : currentSource.tipo !== "srt" ? {url:currentSource.network?.url ?? ""} : {}),
+            captureMetadata: currentSource.tipo === "srt",
             ...(srtProgramBySource[currentSource.id] !== undefined
               ? { programId: srtProgramBySource[currentSource.id] }
               : {}),
@@ -1559,7 +1590,7 @@ export default function MonitorAoVivo() {
           .catch(() => undefined);
       }
     };
-  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, signalActive, srtBridgeNonce, srtProgramBySource]);
+  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, source?.network?.url, source?.network?.sourceName, source?.network?.native, signalActive, srtBridgeNonce, srtProgramBySource]);
 
   const srtChannel = srtProbe?.canal;
   const srtVideoStream = srtProbe?.streams.find(stream => stream.tipo === "video" && srtChannel?.streams?.includes(stream.index))
@@ -1575,7 +1606,7 @@ export default function MonitorAoVivo() {
     send();const timer=setInterval(send,1000);return()=>clearInterval(timer);
   },[aribLinhas,hasDecodedArib,ccActive,ccShowOverlay,signalActive,recordingService.channels[0]?.captureMode,recordingService.channels[0]?.enabled]);
   useEffect(()=>{
-    if(source?.tipo!=='srt'||!signalActive)return;
+    if(!source || !['srt','rtsp','ndi'].includes(source.tipo)||!signalActive)return;
     let cancelled=false;let timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
     const pollAudio=async()=>{
       const sessionId=srtSessionId.current;
@@ -1590,7 +1621,7 @@ export default function MonitorAoVivo() {
 
   // Read captions and EPG from the same live transport as the video.
   useEffect(() => {
-    if (source?.tipo !== "srt" || !signalActive) return;
+    if (!source || !["srt","rtsp","ndi"].includes(source.tipo) || !signalActive) return;
     let cancelled = false;
     let lastCaptionRevision: string | null = null;
     let clearCaptionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1784,12 +1815,12 @@ export default function MonitorAoVivo() {
   };
 
   const configuredChannels = Math.min(parseInt(config.audioChannels)||16, 16);
-  const numCh = source?.tipo === "srt"
+  const numCh = source && ["srt","rtsp","ndi"].includes(source.tipo)
     ? Math.min(Math.max(srtAudioStream?.canais ?? 0, 0), 16)
     : configuredChannels;
   const displayedLevels = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(audioLevels[i]??-60):-60);
   const displayedPeaks = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(peakLevels[i]??-60):-60);
-  const audioFormatLabel = source?.tipo === "srt" && srtAudioStream
+  const audioFormatLabel = source && ["srt","rtsp","ndi"].includes(source.tipo) && srtAudioStream
     ? `${srtAudioStream.codec.toUpperCase()}${srtAudioStream.amostragem ? ` ${Math.round(srtAudioStream.amostragem / 1000)} kHz` : ""}`
     : config.audioFormat.split(" ").slice(0,2).join(" ");
   const hasNotif = !!(config.telegramToken||config.whatsappWebhookUrl);
@@ -1983,7 +2014,7 @@ export default function MonitorAoVivo() {
         <div className="w-px h-5 bg-[#2a3050] shrink-0"/>
         <img src={`${import.meta.env.BASE_URL}server-dtv-logo.png`} alt="SERVER DTV+" className="h-12 w-12 object-contain shrink-0 rounded"/>
         <div className="flex flex-col shrink-0">
-          <span className="text-sm font-bold text-white leading-tight">{SISTEMA}</span>
+          <span className="text-sm font-bold text-white leading-tight">CENSURA PRO</span>
         </div>
          <span className="text-xs text-gray-600 border-l border-gray-700 pl-2 shrink-0 hidden xl:block max-w-[420px] truncate" title={srtHeaderDetails}>{srtHeaderDetails}</span>
         <div className="flex-1"/>
@@ -2043,6 +2074,7 @@ export default function MonitorAoVivo() {
           <Settings className="h-3.5 w-3.5"/>Configurações
         </button>
 
+        <div id="monitor-window-controls" className="contents"/>
         <span className="font-mono text-sm text-gray-300 tabular-nums shrink-0">{clock}</span>
       </div>
 
@@ -2057,16 +2089,16 @@ export default function MonitorAoVivo() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
           {/* Video */}
           <div className={`relative rounded-lg overflow-hidden border-2 transition-colors ${signalActive?(recording?"border-red-500":"border-[#1e4d3a]"):"border-red-700"} bg-black`} style={{ aspectRatio:"16/9", width:"100%" }} data-testid="panel-preview">
-            {source?.tipo === "srt" ? (
+            {source?.tipo === "webrtc" ? <WebRtcInput url={source.network?.url ?? ""} active={signalActive} onAudio={onSrtAudioAnalysis}/> : source && ["srt","rtsp","ndi"].includes(source.tipo) ? (
               srtPlaybackUrl ? (
                 <SrtVideo src={srtPlaybackUrl} active={signalActive} onStateChange={onSrtVideoState} onAudioAnalysis={onSrtAudioAnalysis}/>
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#05070b] text-center">
                   {srtVideoState === "error" ? <AlertTriangle className="h-6 w-6 text-red-400"/> : <Loader2 className="h-6 w-6 text-blue-400 animate-spin"/>}
                   <span className={`text-xs font-semibold ${srtVideoState === "error" ? "text-red-300" : "text-blue-300"}`}>
-                    {srtVideoState === "error" ? "Falha ao abrir o vídeo SRT" : "Conectando ao vídeo SRT…"}
+                    {srtVideoState === "error" ? "Falha ao abrir a entrada" : "Conectando à entrada…"}
                   </span>
-                  <span className="text-[10px] text-gray-500 font-mono">{source.srt?.host}:{source.srt?.port}</span>
+                  <span className="text-[10px] text-gray-500 font-mono">{source.tipo === "srt" ? `${source.srt?.host}:${source.srt?.port}` : source.tipo.toUpperCase()}</span>
                   {srtPlaybackError && <span className="max-w-[80%] text-[10px] leading-relaxed text-red-300">{srtPlaybackError}</span>}
                 </div>
               )
@@ -2075,9 +2107,9 @@ export default function MonitorAoVivo() {
             {signalActive&&<div className="absolute top-2 right-3 font-mono text-xs text-white bg-black/60 px-2 py-0.5 rounded">{videoOverlayDetails}</div>}
             {recording&&recBlink&&<div className="absolute bottom-10 right-3 flex items-center gap-1.5 bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded"><Circle className="h-2 w-2 fill-white"/>GRAVANDO</div>}
             <div className={`absolute bottom-10 left-3 flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded ${signalActive?"bg-teal-700 text-teal-100":"bg-red-900 text-red-200"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${signalActive?(source?.tipo==="srt" && srtVideoState !== "playing" ? "bg-blue-300 animate-pulse" : "bg-teal-300"):"bg-red-400 animate-pulse"}`}/>{signalActive?(source?.tipo==="srt" && srtVideoState !== "playing" ? "CONECTANDO SRT" : "SINAL ATIVO"):"SEM SINAL"}
+              <span className={`h-1.5 w-1.5 rounded-full ${signalActive?(source && ["srt","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? "bg-blue-300 animate-pulse" : "bg-teal-300"):"bg-red-400 animate-pulse"}`}/>{signalActive?(source && ["srt","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? srtVideoState === "error" ? "FALHA NA ENTRADA" : `CONECTANDO ${source?.tipo.toUpperCase()}` : "SINAL ATIVO"):"SEM SINAL"}
             </div>
-            {ccActive&&ccShowOverlay&&signalActive&&(hasDecodedArib || !isAribSource)&&(
+            {ccActive&&ccShowOverlay&&signalActive&&(hasDecodedArib || source?.tipo === "sdi")&&(
               <div className="absolute inset-x-0 bottom-0 z-20 flex justify-center pb-2 px-4 pointer-events-none">
                 <div className="bg-black/85 text-white text-sm font-medium px-4 py-1.5 rounded max-w-[90%] text-center border border-white/10" data-testid="cc-overlay">
                   {hasDecodedArib ? (

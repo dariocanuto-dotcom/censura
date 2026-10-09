@@ -1,3 +1,4 @@
+import { discoverNdi, startNdi, stopNdi } from "../lib/ndi";
 import express, { Router } from "express";
 import { spawn } from "node:child_process";
 import { access, mkdir, rm, readFile } from "node:fs/promises";
@@ -17,6 +18,7 @@ interface StreamSession {
   process: ReturnType<typeof spawn>;
   createdAt: number;
   lastError: string | null;
+  ndi?: Awaited<ReturnType<typeof startNdi>>;
   audio?:{levels:number[];rmsDb:number;peakDb:number;measuredAt:number;channels:number};
 }
 
@@ -448,6 +450,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     "-hide_banner", "-loglevel", "info",
     "-fflags", "+genpts+igndts", "-err_detect", "ignore_err", "-probesize", "5000000", "-analyzeduration", "5000000",
     ...(captureMetadata ? ["-c:s", "libaribcaption", "-sub_type", "ass", "-caption_encoding", "latin"] : []),
+    ...(url.startsWith("rtsp") ? ["-rtsp_transport", "tcp"] : []),
     "-i", url,
     "-map", videoMap, "-map", audioMap,
     "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
@@ -584,6 +587,7 @@ async function stopStream(id: string) {
   const session = streamSessions.get(id);
   if (!session) return;
   streamSessions.delete(id);
+  if (session.ndi) stopNdi(session.ndi);
   if (!session.process.killed) session.process.kill("SIGTERM");
   setTimeout(() => {
     if (!session.process.killed) session.process.kill("SIGKILL");
@@ -602,33 +606,52 @@ router.use("/stream", express.static(streamRoot, {
   },
 }));
 
+router.get("/ndi/sources", async (_req,res) => { res.json(await discoverNdi()); });
+
 // POST /api/srt/stream — inicia uma ponte SRT para reprodução no navegador
 router.post("/stream", async (req, res): Promise<void> => {
-  const { host, port, mode, latencyMs, passphrase, streamId, programId, captureMetadata, recordingDirectory } = req.body as {
-    host: string; port: number; mode?: string; latencyMs?: number; passphrase?: string; streamId?: string; programId?: number; captureMetadata?: boolean; recordingDirectory?: string;
+  const { host, port, mode, latencyMs, passphrase, streamId, programId, captureMetadata, recordingDirectory, url: inputUrl, ndiSource } = req.body as {
+    ndiSource?: string; url?: string; host: string; port: number; mode?: string; latencyMs?: number; passphrase?: string; streamId?: string; programId?: number; captureMetadata?: boolean; recordingDirectory?: string;
   };
-  if (!host || !Number.isInteger(Number(port)) || Number(port) <= 0 || Number(port) > 65535) {
+  if (ndiSource !== undefined && (typeof ndiSource !== "string" || !ndiSource.trim())) { res.status(400).json({ok:false,erro:"Selecione uma fonte NDI em Entradas."}); return; }
+  if (inputUrl !== undefined && (typeof inputUrl !== "string" || !inputUrl.trim())) { res.status(400).json({ok:false,erro:"Informe o endereço RTSP/SRT em Entradas."}); return; }
+  if (!ndiSource && !inputUrl && (!host || !Number.isInteger(Number(port)) || Number(port) <= 0 || Number(port) > 65535)) {
     res.status(400).json({ ok: false, erro: "host e uma porta válida são obrigatórios" });
     return;
   }
 
+  if (inputUrl) {
+    try { if (!['rtsp:','rtsps:','srt:'].includes(new URL(inputUrl).protocol)) throw new Error(); }
+    catch { res.status(400).json({ok:false,erro:"Informe uma URL RTSP ou SRT válida do receptor."}); return; }
+  }
   if (recordingDirectory) {
     if (!isAbsolute(recordingDirectory)) { res.status(400).json({ ok: false, erro: "Escolha uma pasta absoluta no HD." }); return; }
     try { await mkdir(recordingDirectory, { recursive: true }); } catch { res.status(400).json({ ok: false, erro: "Não foi possível acessar a pasta de gravação." }); return; }
   }
+  let ndi: Awaited<ReturnType<typeof startNdi>> | undefined;
+  if (ndiSource) { try { ndi = await startNdi(ndiSource); } catch (error) { res.status(400).json({ok:false,erro:String(error)}); return; } }
   await mkdir(streamRoot, { recursive: true });
   const id = randomUUID();
   const outputDir = join(streamRoot, id);
   await mkdir(outputDir, { recursive: true });
-  const url = buildSrtUrl(host, Number(port), mode ?? "caller", Math.max(Number(latencyMs) || 120, 1000), passphrase, streamId);
+  const url = ndi ? "pipe:0" : inputUrl || buildSrtUrl(host, Number(port), mode ?? "caller", Math.max(Number(latencyMs) || 120, 1000), passphrase, streamId);
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;
-  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captureMetadata === true, recordingDirectory), { stdio: ["ignore", "pipe", "pipe"] });
-  const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastError: null };
+  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
+  const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastError: null, ndi };
   streamSessions.set(id, session);
 
   let stderr = "";
+  if (ndi) {
+    const receiver = ndi;
+    proc.stdin?.on('error', () => {});
+    receiver.stdout.pipe(proc.stdin!);
+    receiver.stderr.on('data', value => { stderr = (stderr + value.toString()).slice(-12000); session.lastError = stderr; });
+    receiver.on('error', error => { session.lastError = error.message; stderr += error.message; proc.kill(); });
+    receiver.on('close', () => proc.stdin?.end());
+    proc.once('close', () => stopNdi(receiver));
+  }
   let inputDescription = "";
   let pcmBuffer=Buffer.alloc(0);let audioChannels=0;
   proc.stdout?.on('data',(chunk:Buffer)=>{

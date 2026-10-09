@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { Children, isValidElement, useEffect, useRef, useState, type ReactNode } from "react";
 import { GripVertical, Lock, Unlock, RotateCcw } from "lucide-react";
 
@@ -8,6 +9,8 @@ const DEFAULT: Saved = { order: [], sizes: {}, locked: true, showBts: false, hid
 const names: Record<string, string> = { "panel-preview": "Preview", "panel-vu": "Áudio", "panel-loudness": "Loudness", "panel-arib": "Closed Caption", "panel-epg": "EPG", "panel-srt-channel": "Canal SRT", "panel-status": "Estado", "panel-metrics": "Sinal", "panel-bts-quick": "Relatórios BTS", "panel-source-info": "Entrada", "panel-tables": "Tabelas BTS", "RecordingBlocks": "Gravação", "alerts": "Alertas" };
 export function MonitorWorkspace({ children }: { children: ReactNode }) {
   const [layout, setLayout] = useState<Saved>(() => { try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return DEFAULT; } });
+  const [toolbarHost,setToolbarHost]=useState<HTMLElement|null>(null);
+  useEffect(()=>{setToolbarHost(document.getElementById('monitor-window-controls'));},[]);
   const [dragged, setDragged] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
@@ -77,19 +80,20 @@ export function MonitorWorkspace({ children }: { children: ReactNode }) {
         column, row: below ? row + (rowSpans[target] ?? 1) : row },
     } })); setDragged(null);
   };
-  return <section className="bg-black text-gray-200">
-    <div className="flex flex-wrap justify-end items-center gap-2 mb-1 text-xs text-gray-300">
+  const controls=<div className="flex flex-wrap items-center gap-2 text-xs text-gray-300">
       <details className="relative" data-testid="menu-janelas">
-        <summary className="cursor-pointer select-none px-3 py-2 rounded bg-[#1a1f2e]">Janelas</summary>
+        <summary className="cursor-pointer select-none px-3 py-1.5 rounded-md border border-[#2a3050] bg-[#1a1f2e]">Janelas</summary>
         <div className="absolute right-0 top-full mt-1 z-50 min-w-52 max-h-[70vh] overflow-auto rounded-lg border border-[#2a3050] bg-[#0f1117] p-2 shadow-xl">
           {entries.map(entry=><label key={entry.id} className="flex items-center gap-2 rounded px-2 py-2 hover:bg-[#1a1f2e] cursor-pointer"><input type="checkbox" checked={visibleEntries.some(e=>e.id===entry.id)} onChange={event=>setLayout(previous=>({...previous,showBts:entry.id==='panel-tables'?event.target.checked:previous.showBts,hidden:event.target.checked?previous.hidden.filter(id=>id!==entry.id):[...new Set([...previous.hidden,entry.id])]}))}/>{names[entry.id]??'Monitoramento'}</label>)}
           <button className="mt-1 w-full text-left px-2 py-2 text-teal-300 border-t border-[#2a3050]" onClick={()=>setLayout(previous=>({...previous,hidden:[],showBts:true}))}>Mostrar todas</button>
         </div>
       </details>
-      <button onClick={() => setLayout(l => ({ ...l, locked: !l.locked }))} className="flex items-center gap-2 px-3 py-2 rounded bg-[#1a1f2e]" aria-label={layout.locked ? "Destravar layout" : "Travar layout"}>{layout.locked ? <Lock size={14}/> : <Unlock size={14}/>}{layout.locked ? "Layout travado" : "Editar layout"}</button>
+      <button onClick={() => setLayout(l => ({ ...l, locked: !l.locked }))} className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-[#2a3050] bg-[#1a1f2e]" aria-label={layout.locked ? "Destravar layout" : "Travar layout"}>{layout.locked ? <Lock size={14}/> : <Unlock size={14}/>}{layout.locked ? "Layout travado" : "Editar layout"}</button>
       {!layout.locked && <button onClick={() => setLayout({ ...DEFAULT, locked: false })} className="flex items-center gap-2"><RotateCcw size={14}/>Restaurar padrão</button>}
-      {!layout.locked && <button onClick={() => move("panel-preview", true, "RecordingBlocks")} className="px-3 py-2 rounded bg-[#1a1f2e]">Gravação abaixo do Preview</button>}
-    </div>
+      {!layout.locked && <button onClick={() => move("panel-preview", true, "RecordingBlocks")} className="px-3 py-1.5 rounded-md border border-[#2a3050] bg-[#1a1f2e]">Gravação abaixo do Preview</button>}
+    </div>;
+  return <section className="bg-black text-gray-200">
+    {toolbarHost?createPortal(controls,toolbarHost):controls}
     <div ref={gridRef} className="monitor-layout-grid grid grid-cols-1 md:grid-cols-12 gap-1 items-start" data-testid="monitor-workspace">
       {visibleEntries.map(({ id, node }) => {
         const size = layout.sizes[id] ?? { span: ["panel-preview", "panel-tables", "alerts"].includes(id) ? 6 : 3 };

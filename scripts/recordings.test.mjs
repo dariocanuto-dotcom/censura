@@ -12,3 +12,20 @@ test('retencao seleciona somente blocos vencidos do canal, sem remover bloco rec
 test('cada codec usa encoder correto, bloqueio FullHD e segmentação diária com relógio',()=>{for(const codec of ['h264','h265']){const args=recordingArgs({...base,codec},process.cwd(),'list.csv');assert.ok(args.includes(codec==='h265'?'libx265':'libx264'));assert.ok(args.includes('600'));assert.match(args.at(-1),/\.pending.*%09d/);}});
 
 test('preserva codecs e formatos escolhidos',()=>{for(const codec of ['h264','h265'])for(const format of ['mp4','mkv']){const result=validateChannel({...base,codec,format});assert.equal(result.codec,codec);assert.equal(result.format,format);}assert.throws(()=>validateChannel({...base,codec:'copy'}));assert.throws(()=>validateChannel({...base,format:'ts'}));});
+
+test('RTSP permite gravação comprimida e rejeita captura de BTS original',()=>{
+  for(const codec of ['h264','h265']) {
+    const config=validateChannel({...base,url:'rtsp://127.0.0.1:8554/canal',codec});
+    const args=recordingArgs(config,process.cwd(),'list.csv');
+    assert.ok(args.indexOf('-rtsp_transport')<args.indexOf('-i'));
+    assert.equal(args[args.indexOf('-rtsp_transport')+1],'tcp');
+  }
+  assert.throws(()=>validateChannel({...base,url:'rtsp://127.0.0.1:8554/canal',codec:'copy',format:'ts'}),/requer gravação/);
+});
+
+
+test('NDI nativo aceita gravação comprimida e rejeita BTS original',()=>{
+  const config=validateChannel({...base,url:'ndi://source/Studio%20(Canal)',codec:'h265'});
+  assert.equal(config.url,'ndi://source/Studio%20(Canal)');
+  assert.throws(()=>validateChannel({...base,url:config.url,codec:'copy',format:'ts'}),/requer gravação/);
+});
