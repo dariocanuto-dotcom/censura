@@ -109,9 +109,10 @@ export function recordingArgs(config: ChannelConfig, root: string, csv: string) 
   const filename = join(root, '.pending', `${randomUUID()}_%09d.${config.format}`).replace(/\\/g, '/');
   const scale=`scale=w=${config.width}:h=${config.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1`;
   const pvw=config.captureMode==='pvw';
+  const captionFont=process.platform==='win32'?"C\\:/Windows/Fonts/consola.ttf":'/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf';
   return ['-hide_banner','-loglevel','warning','-probesize','1000000','-analyzeduration','3000000','-rw_timeout','10000000',
     '-i',config.url,
-    '-map',`${map}:v:0`,'-vf',scale+(pvw?",drawtext=fontfile='C\\:/Windows/Fonts/consola.ttf':textfile='.runtime/recording-service/pvw-cc.txt':reload=1:expansion=none:fontsize=w/80:fontcolor=white:box=1:boxcolor=black@0.85:boxborderw=8:x=(w-text_w)/2:y=h-text_h-20":''),'-map',`${map}:a:0?`,
+    '-map',`${map}:v:0`,'-vf',scale+(pvw?`,drawtext=fontfile='${captionFont}':textfile='.runtime/recording-service/pvw-cc.txt':reload=1:expansion=none:fontsize=w/80:fontcolor=white:box=1:boxcolor=black@0.85:boxborderw=8:x=(w-text_w)/2:y=h-text_h-20`:''),'-map',`${map}:a:0?`,
     '-c:v',config.codec === 'h265' ? 'libx265' : 'libx264','-preset','veryfast','-pix_fmt','yuv420p',
     '-b:v',`${config.videoKbps}k`,'-maxrate',`${config.videoKbps}k`,'-bufsize',`${config.videoKbps * 2}k`,
     '-force_key_frames','expr:gte(t,n_forced*2)','-c:a','aac','-b:a',`${config.audioKbps}k`,'-ar','48000',

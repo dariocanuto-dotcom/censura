@@ -191,3 +191,5 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
+html:has([data-testid='page-monitor']), body:has([data-testid='page-monitor']), #root:has([data-testid='page-monitor']) { background: #000; min-height: 100vh; }

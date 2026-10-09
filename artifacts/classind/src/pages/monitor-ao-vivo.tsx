@@ -256,69 +256,6 @@ function SrtVideo({ src, active, onStateChange, onAudioAnalysis }: {
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src || !active || !window.AudioContext) return;
-
-    let context: AudioContext | null = null;
-    let mediaSource: MediaElementAudioSourceNode | null = null;
-    let splitter: ChannelSplitterNode | null = null;
-    let analysers: AnalyserNode[] = [];
-    let timer: number | null = null;
-
-    try {
-      context = new AudioContext();
-      mediaSource = context.createMediaElementSource(video);
-      splitter = context.createChannelSplitter(8);
-      mediaSource.connect(splitter);
-      analysers = Array.from({ length: 8 }, () => {
-        const analyser = context!.createAnalyser();
-        analyser.fftSize = 1024;
-        analyser.smoothingTimeConstant = 0.65;
-        return analyser;
-      });
-      analysers.forEach((analyser, index) => splitter!.connect(analyser, index));
-
-      const measure = () => {
-        const levels = analysers.map(analyser => {
-          const samples = new Float32Array(analyser.fftSize);
-          analyser.getFloatTimeDomainData(samples);
-          let sum = 0;
-          let peak = 0;
-          samples.forEach(sample => {
-            sum += sample * sample;
-            peak = Math.max(peak, Math.abs(sample));
-          });
-          const rms = Math.sqrt(sum / samples.length);
-          return Math.max(-60, Math.min(0, 20 * Math.log10(Math.max(rms, 0.001))));
-        });
-        const power = levels.reduce((total, level) => total + Math.pow(10, level / 10), 0) / Math.max(levels.length, 1);
-        const peakDb = Math.max(...levels);
-        onAudioAnalysis(levels, Math.max(-60, Math.min(0, 10 * Math.log10(Math.max(power, 0.000001)))), peakDb);
-      };
-
-      timer = window.setInterval(measure, 250);
-      const resume = () => { void context?.resume(); };
-      video.addEventListener("playing", resume);
-      if (!video.paused) resume();
-
-      return () => {
-        if (timer !== null) window.clearInterval(timer);
-        video.removeEventListener("playing", resume);
-        analysers.forEach(analyser => analyser.disconnect());
-        splitter?.disconnect();
-        mediaSource?.disconnect();
-        void context?.close();
-      };
-    } catch {
-      // A browser may reject a second MediaElementAudioSource for the same video.
-      // The video remains usable; the report will mark loudness as unavailable.
-      return () => {
-        if (timer !== null) window.clearInterval(timer);
-        void context?.close();
-      };
-    }
-  }, [src, active, onAudioAnalysis]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -385,17 +322,13 @@ function SrtVideo({ src, active, onStateChange, onAudioAnalysis }: {
 // ─── VU Meter ─────────────────────────────────────────────────────────────────
 
 function VUMeter({ ch, db, peak }: { ch:number; db:number; peak:number }) {
-  return (
-    <div className="flex flex-col items-center gap-0.5 flex-1" data-testid={`vu-${ch}`}>
-      <div className="relative w-full bg-[#111] rounded-sm overflow-hidden" style={{ height:110 }}>
-        {[-60,-40,-18,-6,0].map(t=><div key={t} className="absolute w-full border-t border-gray-800" style={{ bottom:`${dbToH(t)*100}%` }}/>)}
-        <div className="absolute bottom-0 w-full transition-none rounded-sm" style={{ height:`${dbToH(db)*100}%`, background:dbColor(db) }}/>
-        <div className="absolute w-full border-t-2 border-white/50" style={{ bottom:`${dbToH(peak)*100}%` }}/>
-      </div>
-      <span className="text-[9px] font-mono text-gray-400">{ch<=2?(ch===1?"L":"R"):`C${ch}`}</span>
-      <span className="text-[8px] font-mono text-gray-600">{db.toFixed(0)}</span>
+  const lit=Math.max(0,Math.min(24,Math.ceil((db+60)/60*24)));
+  return <div className="flex flex-col items-center flex-1 min-w-0 gap-1" data-testid={`vu-${ch}`} title={`Canal ${ch}: ${db<=-60?'sem sinal':`${db.toFixed(1)} dBFS`}`}>
+    <div className="flex flex-col-reverse gap-px w-full bg-black" style={{height:110}}>
+      {Array.from({length:24},(_,i)=><div key={i} className="flex-1 w-full" style={{background:i<lit?(i>=22?'#ff2400':i>=17?'#d4cb00':'#16f20b'):(i>=22?'#290800':i>=17?'#232000':'#061f05'),boxShadow:i<lit?'0 0 2px currentColor':undefined}}/>)}
     </div>
-  );
+    <span className="text-[9px] font-mono text-gray-400">{ch}</span>
+  </div>;
 }
 
 // ─── Scope ────────────────────────────────────────────────────────────────────
@@ -533,7 +466,7 @@ function LocalHardwarePanel({ path = "", onPath, disabled = false, tunersOnly = 
   </div>;
 }
 
-function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serverTime }: { blocks:RecordingBlock[]; recording:boolean; codec:string; onConfigure:()=>void; channels:RecordingProgressChannel[];serverTime?:string }) {
+function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serverTime }: { blocks:RecordingBlock[]; recording:boolean; codec:string; onConfigure:()=>void; channels:RecordingProgressChannel[];serverTime?:string; "data-testid"?:string }) {
 
   return (
     <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg p-3" data-testid="panel-blocks">
@@ -1367,9 +1300,10 @@ export default function MonitorAoVivo() {
   const [blocks, setBlocks] = useState<RecordingBlock[]>([]);
 
   const [metrics, setMetrics] = useState({ bitrate: 35.4, dropped: 0, strength: 98 });
+  const [audioMeasured,setAudioMeasured]=useState(false);
   const [audioActive, setAudioActive] = useState(false); // only true when audio confirmed arriving
-  const [audioLevels, setAudioLevels] = useState<number[]>(Array(8).fill(-60));
-  const [peakLevels, setPeakLevels] = useState<number[]>(Array(8).fill(-60));
+  const [audioLevels, setAudioLevels] = useState<number[]>(Array(16).fill(-60));
+  const [peakLevels, setPeakLevels] = useState<number[]>(Array(16).fill(-60));
   const [loudnessDb, setLoudnessDb] = useState<number | null>(null);
   const [loudnessEnabled, setLoudnessEnabled] = useState(() => localStorage.getItem("dccp-loudness-enabled") === "true");
   useEffect(() => { localStorage.setItem("dccp-loudness-enabled", String(loudnessEnabled)); }, [loudnessEnabled]);
@@ -1545,7 +1479,7 @@ export default function MonitorAoVivo() {
     if (state === "playing") setSignalActive(true);
   }, []);
   const onSrtAudioAnalysis = useCallback((levels: number[], rmsDb: number, peakDb: number) => {
-    const normalized = Array.from({ length: 8 }, (_, index) => levels[index] ?? -60);
+    const normalized = Array.from({ length: 16 }, (_, index) => levels[index] ?? -60);
     setAudioLevels(normalized);
     setPeakLevels(previous => normalized.map((level, index) => Math.max(level, (previous[index] ?? -60) - 0.5)));
     if (loudnessEnabled) {
@@ -1640,6 +1574,16 @@ export default function MonitorAoVivo() {
     const send=()=>{void fetch('/api/recordings/caption',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}).catch(()=>{});};
     send();const timer=setInterval(send,1000);return()=>clearInterval(timer);
   },[aribLinhas,hasDecodedArib,ccActive,ccShowOverlay,signalActive,recordingService.channels[0]?.captureMode,recordingService.channels[0]?.enabled]);
+  useEffect(()=>{
+    if(source?.tipo!=='srt'||!signalActive)return;
+    let cancelled=false;let timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
+    const pollAudio=async()=>{
+      const sessionId=srtSessionId.current;
+      try{if(sessionId){const response=await fetch(`/api/srt/stream/${sessionId}/audio`,{signal:controller.signal});const data=await response.json();if(!cancelled&&sessionId===srtSessionId.current){if(response.ok&&data.audio){onSrtAudioAnalysis(data.audio.levels,data.audio.rmsDb,data.audio.peakDb);setAudioMeasured(true);setAudioActive(true);}else{setAudioMeasured(false);setAudioLevels(previous=>previous.every(level=>level===-60)?previous:Array(16).fill(-60));}}}}
+      catch{if(!cancelled)setAudioMeasured(false);}
+      if(!cancelled)timer=setTimeout(pollAudio,80);
+    };void pollAudio();return()=>{cancelled=true;clearTimeout(timer);controller.abort();};
+  },[source?.id,source?.tipo,signalActive,onSrtAudioAnalysis]);
   const epgNow = Date.now();
   const visibleEpgEvents = epgEvents.filter(event => !event.startTime || Date.parse(event.startTime) + event.durationSec * 1000 > epgNow);
   const nextEpgEvent = visibleEpgEvents.find(event => event.startTime && Date.parse(event.startTime) > epgNow);
@@ -1678,7 +1622,7 @@ export default function MonitorAoVivo() {
     };
     void poll();
     return () => { cancelled = true; clearTimeout(timer); clearTimeout(clearCaptionTimer); };
-  }, [source?.id, source?.tipo, signalActive]);
+  }, [source?.id, source?.tipo, signalActive,onSrtAudioAnalysis]);
 
   useEffect(() => {
     if (!loudnessEnabled) { setLoudnessDb(null); setLoudnessPeakDb(null); }
@@ -1756,27 +1700,29 @@ export default function MonitorAoVivo() {
   }, [loudnessEnabled, source?.id, source?.tipo, source?.nome, loudnessDb, config.notifyLoudnessLoss, notifyIncident, clearIncident]);
   useEffect(() => {
     // Only trigger audio loss if audio is supposed to be active and all channels are silent
-    const allSilent = audioActive && signalActive && audioLevels.every(db => db <= -54);
+    const allSilent = audioMeasured && audioActive && signalActive && audioLevels.every(db => db <= -54);
     if (allSilent && !audioLossActive.current) {
       audioLossActive.current = true;
       audioLossTimer.current = setTimeout(() => {
-        if (config.notifyAudioLoss) addAndSend("audio", "Falha de Áudio", `Todos os canais ≤ −54 dB em: ${source?.nome}. Verificar PIDs 0x03EA–0x03EB.`);
+        if (config.notifyAudioLoss) addAndSend("audio", "Falha de Áudio", `Todos os canais ≤ −54 dB em: ${source?.nome}. Verificar o áudio do programa selecionado.`);
       }, 5000);
     }
     if (!allSilent) {
       audioLossActive.current = false;
       if (audioLossTimer.current) { clearTimeout(audioLossTimer.current); audioLossTimer.current = null; }
+      if(audioMeasured&&audioLevels.some(db=>db>-54))setAlerts(previous=>previous.some(alert=>alert.tipo==='audio'&&alert.mensagem.startsWith('Todos os canais'))?previous.filter(alert=>!(alert.tipo==='audio'&&alert.mensagem.startsWith('Todos os canais'))):previous);
     }
-  }, [audioLevels, audioActive, signalActive, config.notifyAudioLoss, source?.nome, addAndSend]);
+  }, [audioLevels, audioMeasured, audioActive, signalActive, config.notifyAudioLoss, source?.nome, addAndSend]);
 
   // ── Timecode ──
   useEffect(() => { const tick=()=>{ const n=new Date(); setTimecode(smpteTC(n,fps)); setClock(n.toLocaleTimeString("pt-BR")); }; tick(); const id=setInterval(tick,Math.floor(1000/fps)); return()=>clearInterval(id); }, [fps]);
 
   // Reset audio when source changes or signal drops
   useEffect(() => {
+    setAudioMeasured(false);
     setAudioActive(false);
-    setAudioLevels(Array(8).fill(-60));
-    setPeakLevels(Array(8).fill(-60));
+    setAudioLevels(Array(16).fill(-60));
+    setPeakLevels(Array(16).fill(-60));
     setLoudnessDb(null);
     setLoudnessPeakDb(null);
   }, [sourceIdx]);
@@ -1784,8 +1730,8 @@ export default function MonitorAoVivo() {
   useEffect(() => {
     if (!signalActive) {
       setAudioActive(false);
-      setAudioLevels(Array(8).fill(-60));
-      setPeakLevels(Array(8).fill(-60));
+      setAudioLevels(Array(16).fill(-60));
+      setPeakLevels(Array(16).fill(-60));
     }
     // For SDI sources: signal = audio (embedded SDI always carries audio)
     if (signalActive && source?.tipo === "sdi") setAudioActive(true);
@@ -1804,48 +1750,15 @@ export default function MonitorAoVivo() {
   useEffect(()=>{ if (!recording) return; const id=setInterval(()=>setRecBlink(v=>!v),600); return()=>clearInterval(id); },[recording]);
   useEffect(()=>{ let raf:number; const loop=()=>{ setScopeTick(v=>v+1); raf=requestAnimationFrame(loop); }; raf=requestAnimationFrame(loop); return()=>cancelAnimationFrame(raf); },[]);
 
-  // VU animation — only runs when audio is confirmed arriving
+  // Only decoded input samples drive meters; unconnected inputs stay silent.
   useEffect(()=>{
-    if (!audioActive || !signalActive) {
-      // Drain levels to floor gradually (natural VU decay)
-      const id = setInterval(()=>{
-        setAudioLevels(prev => {
-          const next = prev.map(v => Math.max(-60, v - 3));
-          return next;
-        });
-        setPeakLevels(prev => prev.map(v => Math.max(-60, v - 1)));
-      }, 60);
-      return () => clearInterval(id);
+    if(!audioActive||!signalActive){
+      setAudioLevels(previous=>previous.every(level=>level===-60)?previous:Array(16).fill(-60));
+      setPeakLevels(previous=>previous.every(level=>level===-60)?previous:Array(16).fill(-60));
+      return;
     }
-    // Active: simulate real channel activity per pair
-    const configuredChannels = Math.min(parseInt(config.audioChannels)||8, 8);
-    const detectedSrtChannels = source?.tipo === "srt"
-      ? Math.min(Math.max(srtAudioStream?.canais ?? 0, 0), 8)
-      : configuredChannels;
-    const numCh = source?.tipo === "srt" ? detectedSrtChannels : configuredChannels;
-    const id = setInterval(()=>{
-      setAudioLevels(prev => prev.map((_, i) => {
-        if (i >= numCh) return -60;
-        // Ch 1&2 (L/R main): loudest, natural dynamics
-        if (i < 2) {
-          const base = -12 + Math.sin(Date.now()*0.001 + i*1.3) * 3;
-          return Math.max(-60, Math.min(0, base + (Math.random()-0.5)*8));
-        }
-        // Ch 3-4: secondary mix, slightly lower
-        if (i < 4) {
-          const base = -18 + Math.sin(Date.now()*0.0007 + i) * 2;
-          return Math.max(-60, Math.min(0, base + (Math.random()-0.5)*10));
-        }
-        // Ch 5-8: aux/surround, lower and intermittent
-        const active = Math.random() > 0.15;
-        if (!active) return Math.max(-60, prev[i] - 6);
-        const base = -28 + Math.sin(Date.now()*0.0005 + i*0.7) * 4;
-        return Math.max(-60, Math.min(0, base + (Math.random()-0.5)*12));
-      }));
-      setPeakLevels(prev => prev.map((p, i) => Math.max(audioLevels[i]??-60, p - 0.5)));
-    }, 60);
-    return () => clearInterval(id);
-  }, [audioActive, signalActive, config.audioChannels, source?.tipo, srtAudioStream?.canais, audioLevels]);
+    setPeakLevels(prev=>prev.map((peak,i)=>Math.max(audioLevels[i]??-60,peak-1)));
+  },[audioActive,signalActive,audioLevels]);
 
   useEffect(()=>{ const id=setInterval(()=>{ if (!signalActive) return; setMetrics(m=>({ bitrate:parseFloat((35+Math.random()*4).toFixed(1)), dropped:Math.random()>0.97?m.dropped+1:m.dropped, strength:Math.max(88,Math.min(100,m.strength+(Math.random()-0.5)*2)) })); },1200); return()=>clearInterval(id); },[signalActive]);
   useEffect(()=>{ if (!ccActive||!ccShowOverlay) return; const id=setInterval(()=>setCcLineIdx(i=>(i+1)%CC_LINES.length),5000); return()=>clearInterval(id); },[ccActive,ccShowOverlay]);
@@ -1870,12 +1783,12 @@ export default function MonitorAoVivo() {
     finally{setRecordingBusy(false);}
   };
 
-  const configuredChannels = Math.min(parseInt(config.audioChannels)||8, 8);
+  const configuredChannels = Math.min(parseInt(config.audioChannels)||16, 16);
   const numCh = source?.tipo === "srt"
-    ? Math.min(Math.max(srtAudioStream?.canais ?? 0, 0), 8)
+    ? Math.min(Math.max(srtAudioStream?.canais ?? 0, 0), 16)
     : configuredChannels;
-  const displayedLevels = audioLevels.slice(0,numCh);
-  const displayedPeaks = peakLevels.slice(0,numCh);
+  const displayedLevels = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(audioLevels[i]??-60):-60);
+  const displayedPeaks = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(peakLevels[i]??-60):-60);
   const audioFormatLabel = source?.tipo === "srt" && srtAudioStream
     ? `${srtAudioStream.codec.toUpperCase()}${srtAudioStream.amostragem ? ` ${Math.round(srtAudioStream.amostragem / 1000)} kHz` : ""}`
     : config.audioFormat.split(" ").slice(0,2).join(" ");
@@ -2061,7 +1974,7 @@ export default function MonitorAoVivo() {
   };
 
   return (
-    <div className="flex flex-col gap-3 text-white" data-testid="page-monitor">
+    <div className="flex flex-col gap-3 text-white bg-black min-h-screen" data-testid="page-monitor">
 
       {/* ── Top bar ──────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 bg-[#0f1117] border border-[#1e2332] rounded-lg px-3 py-2 flex-wrap">
@@ -2185,7 +2098,7 @@ export default function MonitorAoVivo() {
             )}
           </div>
 
-          <RecordingBlocks blocks={blocks} recording={recording} codec="Um canal · TS/BTS original" onConfigure={()=>setMultichannelOpen(true)} channels={recordingService.channels} serverTime={recordingService.serverTime}/>
+          <RecordingBlocks data-testid="RecordingBlocks" blocks={blocks} recording={recording} codec="Um canal · TS/BTS original" onConfigure={()=>setMultichannelOpen(true)} channels={recordingService.channels} serverTime={recordingService.serverTime}/>
 
           {/* Scopes / BTS */}
           <div data-testid="panel-tables" className="md:col-span-2 bg-[#0f1117] border border-[#1e2332] rounded-lg overflow-hidden flex flex-col">
@@ -2213,7 +2126,7 @@ export default function MonitorAoVivo() {
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-gray-400 flex items-center gap-1.5">
                 <Mic2 className={`h-3 w-3 ${audioActive?"text-green-400":"text-gray-600"}`}/>
-                {displayedLevels.length} Canais
+                16 canais · {numCh} detectado(s)
               </span>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-mono text-gray-600">{audioFormatLabel}</span>
@@ -2232,27 +2145,12 @@ export default function MonitorAoVivo() {
               </div>
               <div className="relative flex gap-0.5 flex-1">
                 {displayedLevels.map((db,i)=><VUMeter key={i} ch={i+1} db={db} peak={displayedPeaks[i]??-60}/>)}
-                {/* Overlay when no audio */}
-                {!audioActive && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 rounded bg-black/40">
-                    <BellOff className="h-4 w-4 text-gray-600"/>
-                    <span className="text-[10px] text-gray-500 font-semibold">
-                      {!signalActive ? "SEM SINAL"
-                        : source?.tipo === "sdi" ? "—"
-                        : source?.tipo === "srt" && srtProbe?.ok && !srtAudioStream ? "SEM ÁUDIO NO PROGRAMA"
-                        : "AGUARDANDO ÁUDIO"}
-                    </span>
-                  </div>
-                )}
+
               </div>
             </div>
 
             {/* Legend + activate button */}
             <div className="flex items-center justify-between">
-              <div className="flex gap-3 text-[9px]">
-                <span className="text-orange-400 flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-orange-400"/>−6 ref</span>
-                <span className="text-red-400 flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-red-400"/>0 clip</span>
-              </div>
               {/* SRT/UDP: manual activate button */}
               {signalActive && !audioActive && !srtProbeLoading && source?.tipo !== "sdi"
                 && !(source?.tipo === "srt" && srtProbe?.ok) && (
@@ -2265,7 +2163,7 @@ export default function MonitorAoVivo() {
               )}
               {audioActive && (
                 <button
-                  onClick={() => { setAudioActive(false); setAudioLevels(Array(8).fill(-60)); setPeakLevels(Array(8).fill(-60)); }}
+                  onClick={() => { setAudioActive(false); setAudioLevels(Array(16).fill(-60)); setPeakLevels(Array(16).fill(-60)); }}
                   className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
                   data-testid="btn-deactivate-audio">
                   Desativar
@@ -2524,7 +2422,7 @@ export default function MonitorAoVivo() {
           <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg p-3 flex flex-col gap-2" data-testid="panel-status">
             <span className="text-xs font-semibold text-gray-400 mb-0.5">Status do Sistema</span>
             <StatusRow label="Sinal de Vídeo" value={signalActive?"Ativo":"Inativo"} active={signalActive} onClick={()=>setSignalActive(v=>!v)} testId="btn-signal"/>
-            <StatusRow label="Áudio" value={source?.tipo === "srt" && srtProbe?.ok && !srtAudioStream ? "Sem áudio" : audioActive ? "Recebendo" : "Silêncio"} active={audioActive} onClick={()=>{ if (!signalActive || (source?.tipo === "srt" && srtProbe?.ok)) return; setAudioActive(v=>{ if (!v) { setAudioLevels(Array(8).fill(-60)); setPeakLevels(Array(8).fill(-60)); } return !v; }); }} testId="btn-audio"/>
+            <StatusRow label="Áudio" value={source?.tipo === "srt" && srtProbe?.ok && !srtAudioStream ? "Sem áudio" : audioActive ? "Recebendo" : "Silêncio"} active={audioActive} onClick={()=>{ if (!signalActive || (source?.tipo === "srt" && srtProbe?.ok)) return; setAudioActive(v=>{ if (!v) { setAudioLevels(Array(16).fill(-60)); setPeakLevels(Array(16).fill(-60)); } return !v; }); }} testId="btn-audio"/>
             <StatusRow label="Gravação" value={recording?"REC":"Parado"} active={recording} onClick={handleRecord} testId="btn-rec"/>
             <div className="flex items-center justify-between py-0.5">
               <span className="text-xs text-gray-500">Closed Caption</span>

@@ -17,6 +17,7 @@ interface StreamSession {
   process: ReturnType<typeof spawn>;
   createdAt: number;
   lastError: string | null;
+  audio?:{levels:number[];rmsDb:number;peakDb:number;measuredAt:number;channels:number};
 }
 
 interface SrtProbeResult {
@@ -459,6 +460,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     ...(recordingDirectory ? ["-map", videoMap, "-map", audioMap, "-map", "0:s?", "-c", "copy", "-f", "segment", "-segment_time", "600", "-reset_timestamps", "1", join(recordingDirectory, `${Date.now()}_%05d.ts`)] : []),
     ...(captureMetadata ? ["-map", "0:i:278", "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass"),
     "-map", "0:i:18", "-c", "copy", "-f", "data", "-flush_packets", "1", join(outputDir, "epg.bin")] : []),
+    '-map',audioMap,'-vn','-c:a','pcm_s16le','-ar','8000','-f','s16le','-flush_packets','1','pipe:1',
   ];
 }
 
@@ -622,12 +624,24 @@ router.post("/stream", async (req, res): Promise<void> => {
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;
-  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captureMetadata === true, recordingDirectory), { stdio: ["ignore", "ignore", "pipe"] });
+  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captureMetadata === true, recordingDirectory), { stdio: ["ignore", "pipe", "pipe"] });
   const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastError: null };
   streamSessions.set(id, session);
 
   let stderr = "";
   let inputDescription = "";
+  let pcmBuffer=Buffer.alloc(0);let audioChannels=0;
+  proc.stdout?.on('data',(chunk:Buffer)=>{
+    if(!audioChannels){const parsed=parseFfmpegInput(inputDescription,selectedProgramId);const audio=parsed.streams.find(stream=>stream.tipo==='audio'&&parsed.canal?.streams?.includes(stream.index))??parsed.streams.find(stream=>stream.tipo==='audio');audioChannels=Math.min(16,audio?.canais??0);}
+    if(!audioChannels)return;
+    pcmBuffer=Buffer.concat([pcmBuffer,chunk]);const frameBytes=audioChannels*2;const frames=Math.floor(pcmBuffer.length/frameBytes);
+    if(frames<400)return;
+    const sums=Array(audioChannels).fill(0),peaks=Array(audioChannels).fill(0);
+    for(let frame=0;frame<frames;frame++)for(let channel=0;channel<audioChannels;channel++){const sample=pcmBuffer.readInt16LE(frame*frameBytes+channel*2)/32768;sums[channel]+=sample*sample;peaks[channel]=Math.max(peaks[channel],Math.abs(sample));}
+    const db=(value:number)=>Math.max(-60,Math.min(0,20*Math.log10(Math.max(value,0.001))));
+    session.audio={levels:sums.map(sum=>db(Math.sqrt(sum/frames))),rmsDb:db(Math.sqrt(sums.reduce((a,b)=>a+b,0)/frames/audioChannels)),peakDb:db(Math.max(...peaks)),measuredAt:Date.now(),channels:audioChannels};
+    pcmBuffer=pcmBuffer.subarray(frames*frameBytes);
+  });
   const playbackFailure = () => {
     const useful = stderr.split(/\r?\n/).filter(line => /error opening|conversion failed|connection.*(failed|rejected)|unable to|not found|invalid argument|matches no streams|could not|failed to/i.test(line)).slice(-3).join(' ').slice(0,450);
     return useful || 'O sinal não gerou vídeo para o preview. Verifique o programa selecionado e a estabilidade do transporte SRT.';
@@ -677,6 +691,10 @@ router.post("/stream", async (req, res): Promise<void> => {
   });
 });
 
+router.get('/stream/:id/audio',(req,res)=>{
+  const session=streamSessions.get(String(req.params.id));if(!session){res.status(404).json({ok:false});return;}
+  res.setHeader('Cache-Control','no-store');res.json({ok:true,audio:session.audio&&Date.now()-session.audio.measuredAt<1500?session.audio:null});
+});
 router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
   const session = streamSessions.get(String(req.params.id));
   if (!session) { res.status(404).json({ ok: false }); return; }
@@ -686,7 +704,7 @@ router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
   ]);
   const collector = createEitCollector();
   collector.push(epg);
-  res.json({ ok: true, captionRevision: captions.length, linhas: parseAssDialogue(captions, false).slice(-30), eventos: collector.result(), erro: session.lastError });
+  res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision: captions.length, linhas: parseAssDialogue(captions, false).slice(-30), eventos: collector.result(), erro: session.lastError });
 });
 
 router.get("/stream/:id/status", (req, res): void => {
