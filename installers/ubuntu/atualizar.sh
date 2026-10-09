@@ -13,7 +13,7 @@ STAGE="$BASE/app-update-$STAMP"
 BACKUP="$BASE/backups/app-$STAMP"
 SWITCHED=0
 STOPPED=0
-export PATH="$BASE/bin:$BASE/node/bin:$BASE/tools/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$BASE/bin:$BASE/node/bin:$BASE/tools/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 rollback() {
   trap - ERR
