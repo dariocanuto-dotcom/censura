@@ -1514,6 +1514,12 @@ export default function MonitorAoVivo() {
   // second SRT connection that can be rejected by some encoders.
   useEffect(() => {
     let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    const reconnect = () => {
+      if (!cancelled && !reconnectTimer) reconnectTimer = setTimeout(() => {
+        if (!cancelled) setSrtBridgeNonce(value => value + 1);
+      }, 5000);
+    };
     const currentSource = source;
     setAribLinhas([]);
     setAribTemCC(false);
@@ -1557,6 +1563,16 @@ export default function MonitorAoVivo() {
         setSrtProbe(data);
         setSrtProbeLoading(false);
         setSrtPlaybackUrl(data.playbackUrl);
+        const check = async () => {
+          if (cancelled) return;
+          try {
+            const response = await fetch(`/api/srt/stream/${data.streamId}/status`, {signal:AbortSignal.timeout(10000)});
+            const status = await response.json();
+            if (!response.ok || !status.ready) { reconnect(); return; }
+          } catch { reconnect(); return; }
+          if (!cancelled) reconnectTimer = setTimeout(() => { reconnectTimer = undefined; void check(); }, 5000);
+        };
+        void check();
       } catch (e) {
         if (!cancelled) {
           setSrtVideoState("error");
@@ -1567,6 +1583,7 @@ export default function MonitorAoVivo() {
             erro, duracaoProbeMs: 0, url: "",
           });
           setSrtProbeLoading(false);
+          reconnect();
         }
       }
     };
@@ -1574,6 +1591,7 @@ export default function MonitorAoVivo() {
 
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       const id = srtSessionId.current;
       srtSessionId.current = null;
       if (id) {

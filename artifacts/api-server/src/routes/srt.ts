@@ -17,6 +17,8 @@ interface StreamSession {
   dir: string;
   process: ReturnType<typeof spawn>;
   createdAt: number;
+  lastSeen: number;
+  idleTimer?: ReturnType<typeof setInterval>;
   lastError: string | null;
   ndi?: Awaited<ReturnType<typeof startNdi>>;
   audio?:{levels:number[];rmsDb:number;peakDb:number;measuredAt:number;channels:number};
@@ -587,6 +589,7 @@ async function stopStream(id: string) {
   const session = streamSessions.get(id);
   if (!session) return;
   streamSessions.delete(id);
+  if (session.idleTimer) clearInterval(session.idleTimer);
   if (session.ndi) stopNdi(session.ndi);
   if (!session.process.killed) session.process.kill("SIGTERM");
   setTimeout(() => {
@@ -594,6 +597,13 @@ async function stopStream(id: string) {
   }, 2500);
   await rm(session.dir, { recursive: true, force: true }).catch(() => undefined);
 }
+
+// Requests renew the session lease, including playback, audio and status checks.
+router.use("/stream/:id", (req, _res, next) => {
+  const session = streamSessions.get(String(req.params.id));
+  if (session) session.lastSeen = Date.now();
+  next();
+});
 
 // O navegador não reproduz srt:// diretamente; HLS é a ponte compatível com o PWV.
 router.use("/stream", express.static(streamRoot, {
@@ -639,7 +649,7 @@ router.post("/stream", async (req, res): Promise<void> => {
     ? Number(programId)
     : undefined;
   const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
-  const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastError: null, ndi };
+  const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
   streamSessions.set(id, session);
 
   let stderr = "";
@@ -686,7 +696,10 @@ router.post("/stream", async (req, res): Promise<void> => {
   });
 
   // Evita que uma aba abandonada mantenha um decoder ativo indefinidamente.
-  setTimeout(() => { void stopStream(id); }, 30 * 60 * 1000);
+  session.idleTimer = setInterval(() => {
+    if (Date.now() - session.lastSeen > 120000) void stopStream(id);
+  }, 30000);
+  session.idleTimer.unref();
 
   const ready = await waitForManifest(join(outputDir, "index.m3u8"), proc, 30000);
   if (!ready) {
