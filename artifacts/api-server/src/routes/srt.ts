@@ -1,7 +1,7 @@
 import { discoverNdi, startNdi, stopNdi } from "../lib/ndi";
 import express, { Router } from "express";
 import { spawn } from "node:child_process";
-import { access, mkdir, rm, readFile } from "node:fs/promises";
+import { access, mkdir, rm, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ interface StreamSession {
   process: ReturnType<typeof spawn>;
   createdAt: number;
   lastSeen: number;
+  silentSince?: number;
   idleTimer?: ReturnType<typeof setInterval>;
   lastError: string | null;
   ndi?: Awaited<ReturnType<typeof startNdi>>;
@@ -743,17 +744,24 @@ router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
   res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision: captions.length, linhas: parseAssDialogue(captions, false).slice(-30), eventos: collector.result(), erro: session.lastError });
 });
 
-router.get("/stream/:id/status", (req, res): void => {
+router.get("/stream/:id/status", async (req, res): Promise<void> => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const session = streamSessions.get(id);
   if (!session) {
     res.status(404).json({ ok: false, status: "not_found" });
     return;
   }
+  const now=Date.now();
+  const manifest=await stat(join(session.dir,"index.m3u8")).catch(()=>null);
+  const staleVideo=now-session.createdAt>45000 && (!manifest || now-manifest.mtimeMs>30000);
+  if(session.audio && (now-session.audio.measuredAt>15000 || session.audio.rmsDb<=-54)) session.silentSince ??= now;
+  else session.silentSince=undefined;
+  const staleAudio=session.silentSince!==undefined && now-session.silentSince>30000;
+  const ready=session.process.exitCode===null && !staleVideo && !staleAudio;
   res.json({
     ok: true,
-    status: session.process.exitCode === null ? "running" : "stopped",
-    ready: session.process.exitCode === null,
+    status: ready ? "running" : "stopped",
+    ready,
     erro: session.lastError,
     ageMs: Date.now() - session.createdAt,
   });

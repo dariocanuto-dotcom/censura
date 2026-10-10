@@ -15,7 +15,7 @@ export interface ChannelConfig {
 }
 export interface RecordingFile { id: string; channelId: string; channel: string; path: string; start: string; end: string; bytes: number; codec: string; format: string; programId?:number }
 interface Store { channels: ChannelConfig[]; files: RecordingFile[]; audit: { time: string; channelId: string; action: string; detail: string }[] }
-interface Running { root?: string; ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
+interface Running { lastProgress:number; progressKey?:string; root?: string; ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
 const stateDir = resolve('.runtime/recording-service');
 const stateFile = join(stateDir, 'state.json');
 let state: Store = { channels: [], files: [], audit: [] };
@@ -143,7 +143,7 @@ async function start(config: ChannelConfig) {
   // The data demuxer copies transport bytes without rebuilding SI tables or PIDs.
   const args = raw ? ['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url,'-map','0:0','-c','copy','-f','data','pipe:1'] : recordingArgs({...config,url}, root, csv);
   const proc = spawn('ffmpeg', args, { windowsHide: true, env: { ...process.env, TZ: 'BRT3' }, stdio: ['pipe',raw?'pipe':'ignore','pipe'] });
-  const item: Running = { root, ndi, process: proc, config, csv, started: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
+  const item: Running = { root, ndi, process: proc, config, csv, started: Date.now(), lastProgress: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
   running.set(config.id, item);
   if(ndi) {
     ndi.stdout.pipe(proc.stdin!);
@@ -152,6 +152,7 @@ async function start(config: ChannelConfig) {
     ndi.on('close', () => proc.stdin?.end());
     proc.once('close', () => stopNdi(ndi));
   }
+  if(raw) proc.stdout?.on('data',()=>{item.lastProgress=Date.now();lastErrors.delete(config.id);});
   if(raw) item.rawCompletion=captureTransport(proc.stdout!,date=>recordingRoot(config,date),config.blockMinutes??10,block=>{item.activeBlock=block;},async file=>{
     state.files.push({...file,id:randomUUID(),channelId:config.id,channel:config.name,programId:config.programId,codec:'copy',format:'ts'});await save();
   },`${channelSlug(config.name)}_`).catch(error=>{item.error=String(error);lastErrors.set(config.id,item.error);proc.kill();});
@@ -161,7 +162,7 @@ async function start(config: ChannelConfig) {
   proc.on('close', () => {
     if(!item.stopping) void (item.rawCompletion??ingest(item)).then(save).catch(() => {});
     if (running.get(config.id) === item) running.delete(config.id);
-    if (!item.stopping) { retryAfter.set(config.id, Date.now() + 30000); lastErrors.set(config.id, item.error || 'Gravador interrompido.'); audit(config.id,'failure',item.error); }
+    if (!item.stopping) { retryAfter.set(config.id, Date.now() + 5000); lastErrors.set(config.id, item.error || 'Gravador interrompido.'); audit(config.id,'failure',item.error); }
   });
   audit(config.id,'start',`${config.codec}/${config.format} ${config.width}x${config.height}`);
 }
@@ -267,7 +268,22 @@ async function cleanup() {
 async function tick() {
   if (busy || shuttingDown) return; busy = true;
   try {
-    for (const item of running.values()) { await dailyFolders(item.config); if(!item.rawCompletion){await ingest(item); await updateActiveBlock(item);} }
+    for (const item of running.values()) {
+      await dailyFolders(item.config);
+      if(!item.rawCompletion){
+        await ingest(item); await updateActiveBlock(item);
+        const block=item.activeBlock;
+        const key=block ? `${block.start}:${block.bytes}` : undefined;
+        if(key && key!==item.progressKey){item.progressKey=key;item.lastProgress=Date.now();lastErrors.delete(item.config.id);}
+      }
+      if(Date.now()-item.lastProgress>45000){
+        const message='Sem novos dados na gravação por 45 segundos; reconectando a entrada.';
+        audit(item.config.id,'reconnect',message);
+        await stop(item.config.id);
+        lastErrors.set(item.config.id,message);
+        retryAfter.set(item.config.id,Date.now());
+      }
+    }
     await cleanup();
     for (const config of state.channels) {
       if(shuttingDown) break;
@@ -276,7 +292,7 @@ async function tick() {
       const fs = await statfs(config.directory).catch(() => null);
       if (fs && fs.blocks && fs.bavail / fs.blocks <= 0.10) continue;
       if (!running.has(config.id) && Date.now() >= (retryAfter.get(config.id) ?? 0)) {
-        try { await start(config); } catch (error) { lastErrors.set(config.id, String(error)); retryAfter.set(config.id, Date.now() + 30000); }
+        try { await start(config); } catch (error) { lastErrors.set(config.id, String(error)); retryAfter.set(config.id, Date.now() + 5000); }
       }
     }
     await save();
