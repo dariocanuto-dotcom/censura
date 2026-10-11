@@ -1,3 +1,4 @@
+import { SystemStatusBar } from '@/components/system-status-bar';
 import { RecordingStorage } from '@/components/recording-storage';
 import { WebRtcInput } from "@/components/webrtc-input";
 import { MultichannelRecordings } from "@/components/multichannel-recordings";
@@ -2019,7 +2020,7 @@ export default function MonitorAoVivo() {
   };
 
   return (
-    <div className="flex flex-col gap-3 text-white bg-black min-h-screen" data-testid="page-monitor">
+    <div className="flex flex-col gap-3 text-white bg-black min-h-screen pb-24 md:pb-14" data-testid="page-monitor">
 
       {/* ── Top bar ──────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 bg-[#0f1117] border border-[#1e2332] rounded-lg px-3 py-2 flex-wrap">
@@ -2541,6 +2542,7 @@ export default function MonitorAoVivo() {
         saving={btsSaving}
         lastSaved={btsLastSaved}
       />
+      <SystemStatusBar/>
     </div>
   );
 }

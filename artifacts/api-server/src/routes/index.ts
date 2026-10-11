@@ -1,3 +1,4 @@
+import { systemMetrics } from '../lib/system-monitor';
 import recordingsRouter from "./recordings";
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
@@ -15,6 +16,7 @@ import aribRouter from "./arib";
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.get('/system/metrics',async(_req,res)=>{try{res.setHeader('Cache-Control','no-store');res.json(await systemMetrics());}catch{res.status(503).json({error:'Monitoramento indisponível.'});}});
 router.use("/recordings", recordingsRouter);
 router.use("/usuarios", usuariosRouter);
 router.use("/conteudos", conteudosRouter);
