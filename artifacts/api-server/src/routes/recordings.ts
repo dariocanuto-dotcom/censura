@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { once } from 'node:events';
 import { basename } from 'node:path';
 import { isAbsolute, resolve, join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, statfs } from 'node:fs/promises';
 import { createBtsWorkbook } from '../lib/bts-report';
 import { recordingInfo } from '../lib/recording-info';
 import {exportFormats,exportProfiles,startConversion,conversionJob} from '../lib/conversions';
@@ -11,6 +11,16 @@ import { configureChannel, status, getRecording, initRecordings, protectRecordin
 const router = Router();
 router.use(async (_req, _res, next) => { try { await initRecordings(); next(); } catch(error) { next(error); } });
 router.get('/', (_req,res) => res.json(status()));
+router.get('/storage',async(_req,res)=>{
+  const channel=status().channels[0];
+  if(!channel){res.status(404).json({error:'Configure a pasta de gravação.'});return;}
+  try{
+    const info=await statfs(channel.directory);
+    const total=info.blocks*info.bsize,free=info.bavail*info.bsize,used=(info.blocks-info.bfree)*info.bsize;
+    res.setHeader('Cache-Control','no-store');
+    res.json({directory:channel.directory,total,free,used,updatedAt:new Date().toISOString()});
+  }catch{res.status(503).json({error:'Não foi possível consultar o HD da gravação.'});}
+});
 router.post('/report/excel',async(req,res)=>{
   try{const {report,directory}=req.body;if(!report||!Array.isArray(report.auditoria))throw new Error('Relatório inválido.');
     const buffer=await createBtsWorkbook(report);const name=`dccp-bts-${new Date().toISOString().replace(/[:.]/g,'-')}.xlsx`;
