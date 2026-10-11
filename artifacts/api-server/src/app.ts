@@ -10,6 +10,7 @@ const app: Express = express();
 app.use(
   pinoHttp({
     logger,
+    autoLogging:{ignore:(req)=> /^\/api\/(?:srt\/stream\/[^/]+\/(?:audio|metadata|status)|recordings$|system\/metrics)/.test(req.url??'')},
     serializers: {
       req(req) {
         return {

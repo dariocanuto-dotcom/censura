@@ -277,7 +277,10 @@ function SrtVideo({ src, active, onStateChange, onAudioAnalysis }: {
         enableWorker: true,
         lowLatencyMode: true,
         liveSyncDurationCount: 2,
-        backBufferLength: 30,
+        backBufferLength: 6,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 20,
+        maxBufferSize: 16 * 1024 * 1024,
         manifestLoadingMaxRetry: 12,
         levelLoadingMaxRetry: 12,
         fragLoadingMaxRetry: 12,
@@ -1517,6 +1520,7 @@ export default function MonitorAoVivo() {
   // second SRT connection that can be rejected by some encoders.
   useEffect(() => {
     let cancelled = false;
+    const consumerId=`${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     const reconnect = () => {
       if (!cancelled && !reconnectTimer) reconnectTimer = setTimeout(() => {
@@ -1549,6 +1553,7 @@ export default function MonitorAoVivo() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...currentSrt,
+            consumerId,
             ...(currentSource.tipo === "ndi" && (currentSource.network?.native ?? !currentSource.network?.url) ? {ndiSource:currentSource.network?.sourceName ?? ""} : currentSource.tipo !== "srt" ? {url:currentSource.network?.url ?? ""} : {}),
             captureMetadata: currentSource.tipo === "srt",
             ...(srtProgramBySource[currentSource.id] !== undefined
@@ -1559,7 +1564,7 @@ export default function MonitorAoVivo() {
         const data = await r.json() as SrtProbeResult & { streamId?: string; playbackUrl?: string; status?: string };
         if (!r.ok || !data.ok || !data.streamId || !data.playbackUrl) throw new Error(data.erro ?? "Não foi possível iniciar a ponte SRT");
         if (cancelled) {
-          void fetch(`/api/srt/stream/${data.streamId}`, { method: "DELETE" }).catch(() => undefined);
+          void fetch(`/api/srt/stream/${data.streamId}?consumerId=${encodeURIComponent(consumerId)}`, { method: "DELETE" }).catch(() => undefined);
           return;
         }
         srtSessionId.current = data.streamId;
@@ -1600,7 +1605,7 @@ export default function MonitorAoVivo() {
       if (id) {
         const stopPrevious = srtStopPromise.current;
         srtStopPromise.current = stopPrevious
-          .then(() => fetch(`/api/srt/stream/${id}`, { method: "DELETE" }))
+          .then(() => fetch(`/api/srt/stream/${id}?consumerId=${encodeURIComponent(consumerId)}`, { method: "DELETE" }))
           .then(() => undefined)
           .catch(() => undefined);
       }

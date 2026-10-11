@@ -1,7 +1,7 @@
 import { discoverNdi, startNdi, stopNdi } from "../lib/ndi";
 import express, { Router } from "express";
 import { spawn } from "node:child_process";
-import { access, mkdir, rm, readFile, stat } from "node:fs/promises";
+import { access, mkdir, rm, readFile, stat, open } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -14,6 +14,12 @@ const streamSessions = new Map<string, StreamSession>();
 
 interface StreamSession {
   id: string;
+  key: string;
+  consumers: Set<string>;
+  reusable: boolean;
+  readyData?: Record<string,unknown>;
+  eit?: ReturnType<typeof createEitCollector>;
+  eitOffset?: number;
   dir: string;
   process: ReturnType<typeof spawn>;
   createdAt: number;
@@ -227,6 +233,7 @@ export function createEitCollector() {
   return {
     push: consumeSections,
     result(): EpgEvent[] {
+      for(const [key,event] of events)if(event.startTime && Date.parse(event.startTime)<Date.now()-86400000)events.delete(key);
       return [...events.values()].sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
     },
   };
@@ -454,9 +461,10 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     "-fflags", "+genpts+igndts", "-err_detect", "ignore_err", "-probesize", "5000000", "-analyzeduration", "5000000",
     ...(captureMetadata ? ["-c:s", "libaribcaption", "-sub_type", "ass", "-caption_encoding", "latin"] : []),
     ...(url.startsWith("rtsp") ? ["-rtsp_transport", "tcp"] : []),
-    "-i", url,
+    "-threads", "2", "-i", url,
     "-map", videoMap, "-map", audioMap,
-    "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+    "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30",
+    "-c:v", "libx264", "-preset", "superfast", "-threads", "2", "-tune", "zerolatency",
     "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
     "-f", "hls", "-hls_time", "2", "-hls_list_size", "5",
@@ -619,6 +627,22 @@ router.use("/stream", express.static(streamRoot, {
 
 router.get("/ndi/sources", async (_req,res) => { res.json(await discoverNdi()); });
 
+// Serialize creation for the same input so simultaneous tabs share one decoder.
+const pendingStarts=new Map<string,Promise<void>>();
+router.post('/stream',async(req,res,next)=>{
+  const body=req.body??{};
+  const key=JSON.stringify(Object.fromEntries(Object.keys(body).filter(k=>k!=='consumerId').sort().map(k=>[k,body[k]])));
+  res.locals.streamKey=key;
+  const previous=pendingStarts.get(key)??Promise.resolve();
+  let release!:()=>void;
+  const current=new Promise<void>(resolve=>{release=resolve;});
+  pendingStarts.set(key,current);
+  const done=()=>{release();if(pendingStarts.get(key)===current)pendingStarts.delete(key);};
+  res.once('finish',done);res.once('close',done);
+  await previous;
+  if(!res.destroyed)next();else done();
+});
+
 // POST /api/srt/stream — inicia uma ponte SRT para reprodução no navegador
 router.post("/stream", async (req, res): Promise<void> => {
   const { host, port, mode, latencyMs, passphrase, streamId, programId, captureMetadata, recordingDirectory, url: inputUrl, ndiSource } = req.body as {
@@ -639,6 +663,13 @@ router.post("/stream", async (req, res): Promise<void> => {
     if (!isAbsolute(recordingDirectory)) { res.status(400).json({ ok: false, erro: "Escolha uma pasta absoluta no HD." }); return; }
     try { await mkdir(recordingDirectory, { recursive: true }); } catch { res.status(400).json({ ok: false, erro: "Não foi possível acessar a pasta de gravação." }); return; }
   }
+  const key=String(res.locals.streamKey);
+  const consumer=typeof req.body.consumerId==='string'?req.body.consumerId:randomUUID();
+  const existing=[...streamSessions.values()].find(session=>session.key===key && session.reusable && session.process.exitCode===null && session.readyData);
+  if(existing){
+    existing.consumers.add(consumer);existing.lastSeen=Date.now();
+    res.status(201).json({...existing.readyData,consumerId:consumer});return;
+  }
   let ndi: Awaited<ReturnType<typeof startNdi>> | undefined;
   if (ndiSource) { try { ndi = await startNdi(ndiSource); } catch (error) { res.status(400).json({ok:false,erro:String(error)}); return; } }
   await mkdir(streamRoot, { recursive: true });
@@ -650,7 +681,7 @@ router.post("/stream", async (req, res): Promise<void> => {
     ? Number(programId)
     : undefined;
   const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
-  const session: StreamSession = { id, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
+  const session: StreamSession = { id, key, consumers:new Set([consumer]), reusable:true, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
   streamSessions.set(id, session);
 
   let stderr = "";
@@ -712,7 +743,7 @@ router.post("/stream", async (req, res): Promise<void> => {
   }
 
   const parsed = parseFfmpegInput(inputDescription, selectedProgramId);
-  res.status(201).json({
+  const responseData = {
     ok: true,
     streamId: id,
     playbackUrl: `/api/srt/stream/${id}/index.m3u8`,
@@ -725,7 +756,9 @@ router.post("/stream", async (req, res): Promise<void> => {
     erro: null,
     conectado: true,
     duracaoProbeMs: Date.now() - session.createdAt,
-  });
+  };
+  session.readyData=responseData;
+  res.status(201).json({...responseData,consumerId:consumer});
 });
 
 router.get('/stream/:id/audio',(req,res)=>{
@@ -735,13 +768,22 @@ router.get('/stream/:id/audio',(req,res)=>{
 router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
   const session = streamSessions.get(String(req.params.id));
   if (!session) { res.status(404).json({ ok: false }); return; }
-  const [captions, epg] = await Promise.all([
-    readFile(join(session.dir, "captions.ass"), "utf8").catch(() => ""),
-    readFile(join(session.dir, "epg.bin")).catch(() => Buffer.alloc(0)),
-  ]);
-  const collector = createEitCollector();
-  collector.push(epg);
-  res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision: captions.length, linhas: parseAssDialogue(captions, false).slice(-30), eventos: collector.result(), erro: session.lastError });
+  const captionFile=await open(join(session.dir,"captions.ass"),'r').catch(()=>null);
+  let captions='',captionRevision=0;
+  if(captionFile)try{
+    const info=await captionFile.stat();captionRevision=info.size;
+    const length=Math.min(info.size,131072),buffer=Buffer.alloc(length);
+    const result=await captionFile.read(buffer,0,length,info.size-length);
+    captions=buffer.subarray(0,result.bytesRead).toString('utf8');
+  }finally{await captionFile.close();}
+  const epgFile=await open(join(session.dir,"epg.bin"),'r').catch(()=>null);
+  session.eit??=createEitCollector();
+  if(epgFile)try{
+    const info=await epgFile.stat();const offset=session.eitOffset??0;
+    const length=Math.max(0,Math.min(info.size-offset,524288));
+    if(length){const buffer=Buffer.alloc(length);const result=await epgFile.read(buffer,0,length,offset);session.eit.push(buffer.subarray(0,result.bytesRead));session.eitOffset=offset+result.bytesRead;}
+  }finally{await epgFile.close();}
+  res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision, linhas: parseAssDialogue(captions, false).slice(-30), eventos: session.eit.result(), erro: session.lastError });
 });
 
 router.get("/stream/:id/status", async (req, res): Promise<void> => {
@@ -758,6 +800,7 @@ router.get("/stream/:id/status", async (req, res): Promise<void> => {
   else session.silentSince=undefined;
   const staleAudio=session.silentSince!==undefined && now-session.silentSince>30000;
   const ready=session.process.exitCode===null && !staleVideo && !staleAudio;
+  if(!ready)session.reusable=false;
   res.json({
     ok: true,
     status: ready ? "running" : "stopped",
@@ -769,7 +812,12 @@ router.get("/stream/:id/status", async (req, res): Promise<void> => {
 
 router.delete("/stream/:id", async (req, res): Promise<void> => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  await stopStream(id);
+  const session=streamSessions.get(id);
+  if(session){
+    const consumer=typeof req.query.consumerId==='string'?req.query.consumerId:session.consumers.values().next().value;
+    if(consumer)session.consumers.delete(consumer);
+    if(!session.consumers.size)await stopStream(id);
+  }
   res.status(204).send();
 });
 
