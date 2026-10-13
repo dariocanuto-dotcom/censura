@@ -1,3 +1,5 @@
+import { previewKey, previewCopyAllowed, rememberPreviewFormat } from '../lib/preview-format.ts';
+import { videoEncoder, encoderOptions, hardwareFailure } from '../lib/video-acceleration.ts';
 import { discoverNdi, startNdi, stopNdi } from "../lib/ndi";
 import express, { Router } from "express";
 import { spawn } from "node:child_process";
@@ -15,6 +17,8 @@ const streamSessions = new Map<string, StreamSession>();
 interface StreamSession {
   id: string;
   key: string;
+  encoder:string;
+  formatKey:string;
   consumers: Set<string>;
   reusable: boolean;
   readyData?: Record<string,unknown>;
@@ -453,7 +457,7 @@ router.post("/epg", async (req, res): Promise<void> => {
   res.status(result.ok ? 200 : 502).json({ ...result, temEit: result.eventos.length > 0 });
 });
 
-function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false, recordingDirectory?: string) {
+function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false, recordingDirectory?: string, encoder='libx264') {
   const videoMap = programId !== undefined ? `0:p:${programId}:v:0?` : "0:v:0";
   const audioMap = programId !== undefined ? `0:p:${programId}:a:0?` : "0:a:0?";
   return [
@@ -463,9 +467,11 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     ...(url.startsWith("rtsp") ? ["-rtsp_transport", "tcp"] : []),
     "-threads", "2", "-i", url,
     "-map", videoMap, "-map", audioMap,
-    "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30",
-    "-c:v", "libx264", "-preset", "superfast", "-threads", "2", "-tune", "zerolatency",
-    "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
+    ...(encoder==='copy'?['-c:v','copy']:[
+      "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30",
+      ...encoderOptions('h264',encoder,true),
+      "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
+    ]),
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
     "-f", "hls", "-hls_time", "2", "-hls_list_size", "5",
     "-hls_flags", "delete_segments+append_list+omit_endlist",
@@ -541,6 +547,7 @@ function parseFfmpegInput(stderr: string, selectedProgramId?: number) {
       const fps = line.match(/(\d+(?:\.\d+)?)\s+fps/i);
       if (resolution) info.resolucao = resolution[1];
       if (fps) info.fps = Number(fps[1]);
+      const pixels=line.match(/\b(yuv420p(?:10le|12le)?|yuv422p(?:10le)?|yuv444p(?:10le)?|nv12)\b/);if(pixels)info.pixelFormat=pixels[1];
     }
     if (tipo === "audio") {
       const sampleRate = line.match(/(\d{4,6})\s*Hz/i);
@@ -680,8 +687,10 @@ router.post("/stream", async (req, res): Promise<void> => {
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;
-  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
-  const session: StreamSession = { id, key, consumers:new Set([consumer]), reusable:true, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
+  const formatKey=previewKey(url,selectedProgramId);
+  const encoder=await previewCopyAllowed(formatKey)?'copy':await videoEncoder('h264');
+  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory,encoder), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
+  const session: StreamSession = { id, key, encoder, formatKey, consumers:new Set([consumer]), reusable:true, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
   streamSessions.set(id, session);
 
   let stderr = "";
@@ -722,6 +731,7 @@ router.post("/stream", async (req, res): Promise<void> => {
   });
   proc.on("close", code => {
     if (code !== 0 && streamSessions.has(id)) {
+      if(encoder.endsWith('_nvenc'))hardwareFailure('h264',stderr);
       session.lastError = playbackFailure();
       logger.warn({ streamId: id, code, error: stderr }, "SRT playback bridge stopped");
     }
@@ -743,6 +753,9 @@ router.post("/stream", async (req, res): Promise<void> => {
   }
 
   const parsed = parseFfmpegInput(inputDescription, selectedProgramId);
+  const video=parsed.streams.find(item=>item.tipo==='video'&&parsed.canal?.streams?.includes(item.index))??parsed.streams.find(item=>item.tipo==='video');
+  const compatible=await rememberPreviewFormat(formatKey,video);
+  if(encoder==='copy'&&!compatible){await stopStream(id);res.status(502).json({ok:false,erro:'O formato da fonte mudou. Ajustando o preview automaticamente.'});return;}
   const responseData = {
     ok: true,
     streamId: id,
@@ -799,7 +812,9 @@ router.get("/stream/:id/status", async (req, res): Promise<void> => {
   if(session.audio && (now-session.audio.measuredAt>15000 || session.audio.rmsDb<=-54)) session.silentSince ??= now;
   else session.silentSince=undefined;
   const staleAudio=session.silentSince!==undefined && now-session.silentSince>30000;
-  const ready=session.process.exitCode===null && !staleVideo && !staleAudio;
+  // Once the input is known to be browser-compatible, migrate only the preview.
+  if(session.encoder!=='copy'&&await previewCopyAllowed(session.formatKey))session.reusable=false;
+  const ready=session.process.exitCode===null && !staleVideo && !staleAudio && session.reusable;
   if(!ready)session.reusable=false;
   res.json({
     ok: true,

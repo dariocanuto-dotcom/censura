@@ -210,6 +210,12 @@ function srcFps(s: SignalSource): number {
   return 25;
 }
 
+function LiveTimecode({fps}:{fps:number}){
+  const [value,setValue]=useState(()=>smpteTC(new Date(),fps));
+  useEffect(()=>{const timer=setInterval(()=>setValue(smpteTC(new Date(),fps)),Math.max(16,Math.floor(1000/fps)));return()=>clearInterval(timer);},[fps]);
+  return <>{value}</>;
+}
+
 // ─── Notification API ─────────────────────────────────────────────────────────
 
 async function enviarNotificacao(tipo: AlertTipo, titulo: string, mensagem: string, fonte: string, cfg: Config) {
@@ -1778,7 +1784,7 @@ export default function MonitorAoVivo() {
   }, [audioLevels, audioMeasured, audioActive, signalActive, config.notifyAudioLoss, source?.nome, addAndSend]);
 
   // ── Timecode ──
-  useEffect(() => { const tick=()=>{ const n=new Date(); setTimecode(smpteTC(n,fps)); setClock(n.toLocaleTimeString("pt-BR")); }; tick(); const id=setInterval(tick,Math.floor(1000/fps)); return()=>clearInterval(id); }, [fps]);
+  useEffect(() => { const tick=()=>{ const n=new Date(); setTimecode(smpteTC(n,fps)); setClock(n.toLocaleTimeString("pt-BR")); }; tick(); const id=setInterval(tick,1000); return()=>clearInterval(id); }, [fps]);
 
   // Reset audio when source changes or signal drops
   useEffect(() => {
@@ -1811,7 +1817,7 @@ export default function MonitorAoVivo() {
 
   // ── Blink / Scope / Audio / Metrics ──
   useEffect(()=>{ if (!recording) return; const id=setInterval(()=>setRecBlink(v=>!v),600); return()=>clearInterval(id); },[recording]);
-  useEffect(()=>{ let raf:number; const loop=()=>{ setScopeTick(v=>v+1); raf=requestAnimationFrame(loop); }; raf=requestAnimationFrame(loop); return()=>cancelAnimationFrame(raf); },[]);
+  useEffect(()=>{if(scopeTab==='bts')return;const timer=setInterval(()=>{if(!document.hidden)setScopeTick(v=>v+1);},100);return()=>clearInterval(timer);},[scopeTab]);
 
   // Only decoded input samples drive meters; unconnected inputs stay silent.
   useEffect(()=>{
@@ -2150,7 +2156,7 @@ export default function MonitorAoVivo() {
                 </div>
               )
             ) : <ColorBarCanvas active={signalActive} recording={recording}/>}
-            {signalActive&&<div className="absolute top-2 left-3 font-mono text-xs text-white bg-black/60 px-2 py-0.5 rounded">{timecode}</div>}
+            {signalActive&&<div className="absolute top-2 left-3 font-mono text-xs text-white bg-black/60 px-2 py-0.5 rounded"><LiveTimecode fps={fps}/></div>}
             {signalActive&&<div className="absolute top-2 right-3 font-mono text-xs text-white bg-black/60 px-2 py-0.5 rounded">{videoOverlayDetails}</div>}
             {recording&&recBlink&&<div className="absolute bottom-10 right-3 flex items-center gap-1.5 bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded"><Circle className="h-2 w-2 fill-white"/>GRAVANDO</div>}
             <div className={`absolute bottom-10 left-3 flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded ${signalActive?"bg-teal-700 text-teal-100":"bg-red-900 text-red-200"}`}>

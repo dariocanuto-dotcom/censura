@@ -1,3 +1,4 @@
+import { videoEncoder, encoderOptions, hardwareFailure } from './video-acceleration.ts';
 import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { startNdi, stopNdi } from './ndi.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -111,7 +112,7 @@ async function dailyFolders(config: ChannelConfig) {
   await mkdir(join(root, '.pending'), { recursive: true });
   return root;
 }
-export function recordingArgs(config: ChannelConfig, root: string, csv: string) {
+export function recordingArgs(config: ChannelConfig, root: string, csv: string, encoder?:string) {
   const map = config.programId === undefined ? '0' : `0:p:${config.programId}`;
   // Numeric staging prevents native FFmpeg timezone differences and name collisions.
   // A completed block is moved to its Brazilian date/time folder before indexing.
@@ -123,7 +124,7 @@ export function recordingArgs(config: ChannelConfig, root: string, csv: string) 
     ...(config.url.startsWith('rtsp') ? ['-rtsp_transport','tcp'] : []),
     '-i',config.url,
     '-map',`${map}:v:0`,'-vf',scale+(pvw?`,drawtext=fontfile='${captionFont}':textfile='.runtime/recording-service/pvw-cc.txt':reload=1:expansion=none:fontsize=w/80:fontcolor=white:box=1:boxcolor=black@0.85:boxborderw=8:x=(w-text_w)/2:y=h-text_h-20`:''),'-map',`${map}:a:0?`,
-    '-c:v',config.codec === 'h265' ? 'libx265' : 'libx264','-preset','veryfast','-pix_fmt','yuv420p',
+    ...encoderOptions(config.codec==='h265'?'h265':'h264',encoder??(config.codec==='h265'?'libx265':'libx264')),'-pix_fmt','yuv420p',
     '-b:v',`${config.videoKbps}k`,'-maxrate',`${config.videoKbps}k`,'-bufsize',`${config.videoKbps * 2}k`,
     '-force_key_frames','expr:gte(t,n_forced*2)','-c:a','aac','-b:a',`${config.audioKbps}k`,'-ar','48000',
     '-f','segment','-segment_time',String((config.blockMinutes ?? 2)*60),'-segment_atclocktime','1','-reset_timestamps','1',
@@ -141,7 +142,8 @@ async function start(config: ChannelConfig) {
   let url=ndi ? "pipe:0" : config.url;
   if(url.startsWith('srt:')){const parsed=new URL(url);parsed.searchParams.set('latency',String(Math.max(Number(parsed.searchParams.get('latency'))||0,1000000)));url=parsed.toString();}
   // The data demuxer copies transport bytes without rebuilding SI tables or PIDs.
-  const args = raw ? ['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url,'-map','0:0','-c','copy','-f','data','pipe:1'] : recordingArgs({...config,url}, root, csv);
+  const encoder=raw?undefined:await videoEncoder(config.codec==='h265'?'h265':'h264');
+  const args = raw ? ['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url,'-map','0:0','-c','copy','-f','data','pipe:1'] : recordingArgs({...config,url}, root, csv, encoder);
   const proc = spawn('ffmpeg', args, { windowsHide: true, env: { ...process.env, TZ: 'BRT3' }, stdio: ['pipe',raw?'pipe':'ignore','pipe'] });
   const item: Running = { root, ndi, process: proc, config, csv, started: Date.now(), lastProgress: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
   running.set(config.id, item);
@@ -160,6 +162,7 @@ async function start(config: ChannelConfig) {
   proc.stderr?.on('data', chunk => { item.error = (item.error + chunk.toString()).slice(-3000); });
   proc.on('error', error => { item.error = error.message; lastErrors.set(config.id, item.error); });
   proc.on('close', () => {
+    if(encoder?.endsWith('_nvenc')&&!item.stopping)hardwareFailure(config.codec==='h265'?'h265':'h264',item.error);
     if(!item.stopping) void (item.rawCompletion??ingest(item)).then(save).catch(() => {});
     if (running.get(config.id) === item) running.delete(config.id);
     if (!item.stopping) { retryAfter.set(config.id, Date.now() + 5000); lastErrors.set(config.id, item.error || 'Gravador interrompido.'); audit(config.id,'failure',item.error); }

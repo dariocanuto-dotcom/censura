@@ -74,17 +74,17 @@ export async function registerSnapshot(snapshot:any){
  latestSnapshot={source:snapshot.source.slice(0,200),program:String(snapshot.program??'').slice(0,200),checks:snapshot.checks.map((c:any)=>({label:String(c.label??'').slice(0,100),status:String(c.status??'').slice(0,20),detail:String(c.detalhe??c.detail??'').slice(0,1000)})),epg:snapshot.epg.map((e:any)=>({serviceId:e.serviceId,eventId:e.eventId,startTime:e.startTime,durationSec:e.durationSec,title:String(e.title??'').slice(0,500),description:String(e.description??'').slice(0,2000)}))};
  if(Date.now()-lastSnapshot>=300000){lastSnapshot=Date.now();await event('snapshot','Auditoria BTS/EPG',latestSnapshot.source,latestSnapshot);}
 }
-async function readHistory(start:string,end:string){
+async function readHistory(start:string,end:string,includeEnd=false){
  const events:Event[]=[];const folder=join(root,'history');
  const names:string[]=await readdir(folder).catch(()=>[] as string[]);
  for(const file of names.filter(f=>/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)&&f.slice(0,10)>=start.slice(0,10)&&f.slice(0,10)<=end.slice(0,10)).sort()){
   const lines=createInterface({input:createReadStream(join(folder,file)),crlfDelay:Infinity});
-  for await(const line of lines){try{const item:Event=JSON.parse(line);if(item.time>=start&&item.time<end)events.push(item);}catch{}}
+  for await(const line of lines){try{const item:Event=JSON.parse(line);if(item.time>=start&&(includeEnd?item.time<=end:item.time<end))events.push(item);}catch{}}
  }
  return events;
 }
 export async function operationalReport(period:ReportPeriod,date?:string,at=new Date()){
- await initOperations();const window=reportWindow(period,date,at);const events=await readHistory(window.start,window.end);
+ await initOperations();const window=reportWindow(period,date,at);const events=await readHistory(window.start,window.end,period==='moment');
  const current=status(),blocks=events.filter(e=>e.type==='block');
  const workbook=new ExcelJS.Workbook();workbook.creator='CENSURA PRO';
  const summary=workbook.addWorksheet('Resumo');
