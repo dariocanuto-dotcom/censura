@@ -1,3 +1,4 @@
+import { OperationalReports } from '@/components/operational-reports';
 import { SystemStatusBar } from '@/components/system-status-bar';
 import { RecordingStorage } from '@/components/recording-storage';
 import { WebRtcInput } from "@/components/webrtc-input";
@@ -83,6 +84,7 @@ interface DirectoryPickerWindow extends Window {
   showDirectoryPicker?: () => Promise<ReportDirectoryHandle>;
 }
 interface Config {
+  telegramServerConfigured?:boolean;
   codec: string; bitrate: string; container: string; audioFormat: string; audioChannels: string;
   ccLang: string; ccFormat: string; outputPath: string; blockDurationMin: number;
   notifyVideoLoss: boolean; notifyAudioLoss: boolean; notifyCCLoss: boolean; notifyLoudnessLoss: boolean;
@@ -214,7 +216,7 @@ async function enviarNotificacao(tipo: AlertTipo, titulo: string, mensagem: stri
   const body: Record<string, unknown> = { tipo, titulo, mensagem, fonte, severidade: "critico" };
   if (cfg.telegramToken && cfg.telegramChatId) body.telegram = { token: cfg.telegramToken, chatId: cfg.telegramChatId };
   if (cfg.whatsappWebhookUrl && cfg.whatsappNumero) body.whatsapp = { webhookUrl: cfg.whatsappWebhookUrl, numero: cfg.whatsappNumero, token: cfg.whatsappToken||undefined, provider: cfg.whatsappProvider };
-  if (!body.telegram && !body.whatsapp) return { canais: [], erros: ["Nenhum canal configurado"] };
+  if (!body.telegram && !body.whatsapp && !cfg.telegramServerConfigured) return { canais: [], erros: ["Nenhum canal configurado"] };
   try {
     const res = await fetch("/api/notificacoes/enviar", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
     const data = await res.json() as { resultados: { canal:string; ok:boolean; erro?:string }[] };
@@ -500,7 +502,7 @@ const ALERT_META: Record<AlertTipo,{label:string;icon:string;color:string}> = {
 };
 
 function AlertBanner({ alerts, onDismiss, onSend, config }: { alerts:AlertEntry[]; onDismiss:(id:string)=>void; onSend:(id:string)=>void; config:Config }) {
-  const hasCh=!!(config.telegramToken||config.whatsappWebhookUrl);
+  const hasCh=!!(config.telegramToken||config.whatsappWebhookUrl||config.telegramServerConfigured);
   if (alerts.length===0) return null;
   return (
     <div className="flex flex-col gap-1.5" data-testid="alert-banners">
@@ -895,6 +897,8 @@ function SettingsDialog({ open, onOpenChange, config, onChange, sourceName, onRe
       <DialogContent className="bg-[#0f1117] border-[#1e2332] text-white max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle className="text-white flex items-center gap-2"><Settings className="h-4 w-4 text-teal-400"/>Configurações — {SISTEMA}</DialogTitle></DialogHeader>
         <div className="grid gap-5 py-2">
+          <OperationalReports mode="settings" telegramToken={draft.telegramToken} telegramChatId={draft.telegramChatId}/>
+
           <Sec title="Codec e Bitrate de Saída">
             <Row label="Codec"><Select value={draft.codec} onValueChange={v=>u("codec",v)}><ST><SelectValue/></ST><SC>{["ProRes 422 HQ","ProRes 4444","DNxHD 185","H.264 High","H.265 Main","MPEG-2 422P@HL"].map(c=><SI key={c} value={c}>{c}</SI>)}</SC></Select></Row>
             <Row label="Bitrate"><Select value={draft.bitrate} onValueChange={v=>u("bitrate",v)}><ST><SelectValue/></ST><SC>{["8 Mbps","15 Mbps","25 Mbps","35 Mbps","50 Mbps","100 Mbps","220 Mbps"].map(b=><SI key={b} value={b}>{b}</SI>)}</SC></Select></Row>
@@ -1207,6 +1211,8 @@ function BtsReportDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto pr-1">
+          <OperationalReports/>
+
           <div className="rounded-lg border border-[#1e2332] bg-[#0b0e14] p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1300,7 +1306,13 @@ export default function MonitorAoVivo() {
   const [multichannelOpen, setMultichannelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [srtTestOpen, setSrtTestOpen] = useState(false);
-  const [config, setConfig] = useState<Config>(() => ({ ...DEFAULT_CONFIG, outputPath: localStorage.getItem("dccp-recording-path") ?? "" }));
+  const [config, setConfig] = useState<Config>(() => {try{return {...DEFAULT_CONFIG,...JSON.parse(localStorage.getItem("dccp-notification-settings")??"{}"),outputPath:localStorage.getItem("dccp-recording-path")??""};}catch{return DEFAULT_CONFIG;}});
+  useEffect(()=>{
+    let alive=true;const refresh=()=>{void fetch('/api/operations/config').then(r=>r.json()).then(data=>{if(alive)setConfig(current=>({...current,telegramServerConfigured:Boolean(data.telegramConfigured),notifyVideoLoss:data.videoAlert??current.notifyVideoLoss,notifyAudioLoss:data.audioAlert??current.notifyAudioLoss,notifyCCLoss:data.ccAlert??current.notifyCCLoss}));}).catch(()=>{});};
+    refresh();const timer=setInterval(refresh,60000);window.addEventListener('dccp-notification-settings-updated',refresh);
+    return()=>{alive=false;clearInterval(timer);window.removeEventListener('dccp-notification-settings-updated',refresh);};
+  },[]);
+
 
   const source = sources[Math.min(sourceIdx, sources.length - 1)] ?? sources[0];
   useEffect(()=>{if(source)localStorage.setItem('dccp-selected-source',source.id);},[source?.id]);
@@ -1843,7 +1855,7 @@ export default function MonitorAoVivo() {
   const audioFormatLabel = source && ["srt","rtsp","ndi"].includes(source.tipo) && srtAudioStream
     ? `${srtAudioStream.codec.toUpperCase()}${srtAudioStream.amostragem ? ` ${Math.round(srtAudioStream.amostragem / 1000)} kHz` : ""}`
     : config.audioFormat.split(" ").slice(0,2).join(" ");
-  const hasNotif = !!(config.telegramToken||config.whatsappWebhookUrl);
+  const hasNotif = !!(config.telegramToken||config.whatsappWebhookUrl||config.telegramServerConfigured);
   const activeAlerts = alerts.filter(a=>a.status!=="enviado");
   const selectedSrtProgramId = source?.id ? srtProgramBySource[source.id] : undefined;
   const srtProgramOptions = (srtProbe?.canais ?? []).filter(canal => canal.programaId !== undefined);
@@ -1933,6 +1945,21 @@ export default function MonitorAoVivo() {
       setBtsLastSaved(`Não foi possível selecionar o diretório: ${String(error)}`);
     }
   };
+
+  const operationSnapshot=useRef<any>(null);
+  operationSnapshot.current={source:source?.nome??'Entrada',program:selectedProgramName,checks:btsChecks,epg:programEpg};
+  useEffect(()=>{
+    const clientId=sessionStorage.getItem('dccp-operation-client')??`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem('dccp-operation-client',clientId);
+    const selected=sources.find(item=>item.id===source?.id);
+    if(!selected)return;
+    const fingerprint=JSON.stringify([selected.tipo,selected.srt?.host,selected.srt?.port,selected.udp?.address,selected.udp?.port,selected.network?.sourceName,selected.network?.url?.split('?')[0].replace(/\/\/[^/@]+@/,'//'),selected.sdi?.deviceId,selected.sdi?.portIndex]);
+    void fetch('/api/operations/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId,source:{id:selected.id,name:selected.nome,fingerprint}})}).catch(()=>{});
+  },[source?.id,source?.nome,source?.srt?.host,source?.srt?.port,source?.udp?.address,source?.udp?.port,source?.network?.sourceName,source?.network?.url,source?.sdi?.deviceId,source?.sdi?.portIndex]);
+  useEffect(()=>{
+    const send=()=>{if(!operationSnapshot.current)return;void fetch('/api/operations/snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(operationSnapshot.current)}).catch(()=>{});};
+    send();const timer=setInterval(send,60000);return()=>clearInterval(timer);
+  },[]);
 
   const generateBtsReport = async () => {
     setBtsSaving(true);
@@ -2531,7 +2558,7 @@ export default function MonitorAoVivo() {
       {/* ── Dialogs ───────────────────────────────────────────────── */}
       <MultichannelRecordings open={multichannelOpen} onOpenChange={setMultichannelOpen} inputSource={recordingInput}/>
       <EntradasDialog open={entradasOpen} onOpenChange={setEntradasOpen} sources={sources} onSave={s=>{ saveSources(s); setSourceIdx(0); }}/>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); }} sourceName={source?.nome??SISTEMA} onRecordings={()=>setMultichannelOpen(true)}/>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); localStorage.setItem("dccp-notification-settings", JSON.stringify(next)); void fetch('/api/operations/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({videoAlert:next.notifyVideoLoss,audioAlert:next.notifyAudioLoss,ccAlert:next.notifyCCLoss,...(next.telegramToken&&next.telegramChatId?{token:next.telegramToken,chatId:next.telegramChatId}:{})})}).catch(()=>{}); }} sourceName={source?.nome??SISTEMA} onRecordings={()=>setMultichannelOpen(true)}/>
       <SrtTestDialog open={srtTestOpen} onOpenChange={setSrtTestOpen} source={source?.tipo==="srt"?source:null}/>
       <BtsReportDialog
         open={btsReportOpen}

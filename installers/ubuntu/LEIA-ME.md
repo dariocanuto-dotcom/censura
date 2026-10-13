@@ -44,3 +44,14 @@ O pacote baixa Node.js 24 LTS do [site oficial](https://nodejs.org/dist/latest-v
 ## Validação deste pacote
 
 Código e builds verificados no Windows. A instalação completa em Ubuntu ainda precisa ser validada na máquina de teste. A detecção automática de placas BDA e HDs da versão Windows não se aplica ao Linux; configure pastas montadas manualmente e use entradas de rede SRT/UDP/RTP.
+
+
+## Alertas e relatórios pelo Telegram
+
+Em Configurações → Alertas do sistema, salve o Bot Token e o Chat ID. O token não é retornado nas consultas e fica no estado privado do serviço. Cada alarme pode ser ativado separadamente: vídeo, áudio, Closed Caption, mudança de entrada e parada/retomada da gravação.
+
+O servidor monitora o gravador mesmo com o navegador fechado. Os alertas de vídeo, áudio e CC continuam usando a detecção do monitor, com o Telegram salvo no servidor. Mudanças no monitor e na entrada do gravador são registradas separadamente.
+
+Os relatórios em Excel podem ser baixados ou enviados ao Telegram em Relatório BTS: momento atual, dia (24 horas), semana de segunda a domingo e mês. Uma data de referência seleciona o período. O histórico operacional é mantido por 95 dias; dados de gravações já existentes são importados, mas falhas antigas não são inventadas. Dados BTS/EPG são coletados quando o monitor está ativo.
+
+Os agendamentos usam America/Sao_Paulo: diário à meia-noite, semanal na segunda-feira e mensal no dia 1. O envio aguarda pelo menos um minuto após o fechamento para finalizar o último bloco. Falhas de envio são tentadas novamente; relatórios já entregues não são reenviados automaticamente. Cópias dos relatórios enviados ficam em /var/lib/server-dtv/recording-service/operations/reports.

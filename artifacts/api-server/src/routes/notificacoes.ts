@@ -1,3 +1,4 @@
+import { configureOperations, initOperations, serverTelegramCredentials, recordBroadcastAlert } from '../lib/operations';
 import { Router } from "express";
 import { z } from "zod";
 
@@ -90,6 +91,9 @@ async function sendWhatsApp(cfg: NonNullable<z.infer<typeof NotificacaoBody>["wh
 
 router.post("/enviar", async (req, res) => {
   const body = NotificacaoBody.parse(req.body);
+  await initOperations();
+  if(body.telegram)await configureOperations({token:body.telegram.token,chatId:body.telegram.chatId});
+  if(!await recordBroadcastAlert(body.tipo,body.titulo,body.mensagem,body.fonte)){res.json({enviado:false,resultados:[],mensagem:"Alerta desativado nas configurações do servidor."});return;}
 
   const emojiMap: Record<string, string> = {
     video: "📺",
@@ -125,7 +129,8 @@ router.post("/enviar", async (req, res) => {
   const results: SendResult[] = [];
 
   const promises: Promise<SendResult>[] = [];
-  if (body.telegram) promises.push(sendTelegram(body.telegram.token, body.telegram.chatId, text));
+  const telegram=body.telegram??serverTelegramCredentials();
+  if (telegram) promises.push(sendTelegram(telegram.token, telegram.chatId, text));
   if (body.whatsapp) promises.push(sendWhatsApp(body.whatsapp, text.replace(/<[^>]+>/g, "")));
 
   const settled = await Promise.allSettled(promises);

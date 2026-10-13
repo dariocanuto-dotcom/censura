@@ -1,0 +1,12 @@
+import {Router} from 'express';
+import {configureOperations,initOperations,operationsConfig,operationalReport,sendOperationalReport,registerInput,registerSnapshot} from '../lib/operations.ts';
+import {reportWindow,type ReportPeriod} from '../lib/report-period.ts';
+const router=Router();
+router.use(async(_req,_res,next)=>{try{await initOperations();next();}catch(error){next(error);}});
+router.get('/config',(_req,res)=>res.json(operationsConfig()));
+router.put('/config',async(req,res)=>{try{res.json(await configureOperations(req.body));}catch(error){res.status(400).json({error:error instanceof Error?error.message:'Configuração inválida.'});}});
+router.post('/input',async(req,res)=>{try{await registerInput(req.body.clientId,req.body.source);res.json({ok:true});}catch{res.status(400).json({error:'Entrada inválida.'});}});
+router.post('/snapshot',async(req,res)=>{try{await registerSnapshot(req.body);res.json({ok:true});}catch{res.status(400).json({error:'Auditoria inválida.'});}});
+router.get('/report',async(req,res)=>{try{const period=String(req.query.period??'moment') as ReportPeriod;const date=typeof req.query.date==='string'?req.query.date:undefined;reportWindow(period,date);const report=await operationalReport(period,date);res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${report.name}"`);res.send(report.buffer);}catch(error){res.status(400).json({error:error instanceof Error?error.message:'Falha ao gerar relatório.'});}});
+router.post('/report/send',async(req,res)=>{try{reportWindow(req.body.period,req.body.date);const name=await sendOperationalReport(req.body.period,req.body.date);res.json({ok:true,name});}catch{res.status(502).json({error:'Não foi possível enviar. Verifique o Telegram salvo no servidor.'});}});
+export default router;
