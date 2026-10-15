@@ -1,3 +1,4 @@
+import {networkInputUrl} from '../lib/network-input.ts';
 import {latestBtsDataForSource} from '../lib/bts-samples.ts';
 import { previewKey, previewCopyAllowed, rememberPreviewFormat } from '../lib/preview-format.ts';
 import { videoEncoder, encoderOptions, hardwareFailure } from '../lib/video-acceleration.ts';
@@ -246,6 +247,7 @@ export function createEitCollector() {
 }
 
 function ffprobe(url: string, timeoutMs: number): Promise<SrtProbeResult> {
+  url=networkInputUrl(url);
   return new Promise(resolve => {
     const t0 = Date.now();
     const args = [
@@ -685,7 +687,7 @@ router.post("/stream", async (req, res): Promise<void> => {
   const id = randomUUID();
   const outputDir = join(streamRoot, id);
   await mkdir(outputDir, { recursive: true });
-  const url = ndi ? "pipe:0" : inputUrl || buildSrtUrl(host, Number(port), mode ?? "caller", Math.max(Number(latencyMs) || 120, 1000), passphrase, streamId);
+  const url = ndi ? "pipe:0" : networkInputUrl(inputUrl || buildSrtUrl(host, Number(port), mode ?? "caller", Math.max(Number(latencyMs) || 120, 1000), passphrase, streamId));
   const selectedProgramId = programId !== undefined && programId !== null && Number.isInteger(Number(programId))
     ? Number(programId)
     : undefined;

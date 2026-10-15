@@ -1,3 +1,4 @@
+import {networkInputUrl} from './network-input.ts';
 import { videoEncoder, encoderOptions, hardwareFailure } from './video-acceleration.ts';
 import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { startNdi, stopNdi } from './ndi.ts';
@@ -139,7 +140,7 @@ async function start(config: ChannelConfig) {
   await writeFile(csv, '');
   const ndi = config.url.startsWith('ndi:') ? await startNdi(decodeURIComponent(new URL(config.url).pathname.slice(1))) : undefined;
   const raw=config.codec==='copy';
-  let url=ndi ? "pipe:0" : config.url;
+  let url=ndi ? "pipe:0" : networkInputUrl(config.url);
   if(url.startsWith('srt:')){const parsed=new URL(url);parsed.searchParams.set('latency',String(Math.max(Number(parsed.searchParams.get('latency'))||0,1000000)));url=parsed.toString();}
   // The data demuxer copies transport bytes without rebuilding SI tables or PIDs.
   const encoder=raw?undefined:await videoEncoder(config.codec==='h265'?'h265':'h264');

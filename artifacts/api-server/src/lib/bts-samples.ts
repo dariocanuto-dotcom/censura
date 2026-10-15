@@ -1,3 +1,4 @@
+import {networkInputUrl} from './network-input.ts';
 import {saveHdSnapshot} from './hd-snapshot.ts';
 import {samplePair} from './sample-pair.ts';
 import {spawn,type ChildProcess} from 'node:child_process';
@@ -33,7 +34,7 @@ async function tick(){
   if(run||Date.now()<retryAt)return;
   await mkdir(config.directory,{recursive:true});const fs=await statfs(config.directory);
   if(fs.blocks&&fs.bavail/fs.blocks<=0.1){error='Captura BTS suspensa: o HD tem 10% ou menos de espaço livre.';retryAt=Date.now()+30000;return;}
-  const url=new URL(channel.url);if(url.protocol==='srt:')url.searchParams.set('latency',String(Math.max(Number(url.searchParams.get('latency'))||0,1000000)));if(url.protocol==='udp:')url.searchParams.set('reuse','1');
+  const url=new URL(networkInputUrl(channel.url));if(url.protocol==='srt:')url.searchParams.set('latency',String(Math.max(Number(url.searchParams.get('latency'))||0,1000000)));if(url.protocol==='udp:')url.searchParams.set('reuse','1');
   const process=spawn('ffmpeg',['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url.toString(),'-map','0:0','-c','copy','-f','data','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
   let stderr='';process.stdin?.on('error',()=>{});process.stderr?.on('data',value=>{stderr=(stderr+value.toString()).slice(-1000);});process.on('error',()=>{error='Não foi possível iniciar o receptor de amostras BTS.';});
   const worker={process,signature,stopping:false,receivedAt:Date.now(),done:Promise.resolve()};run=worker;
