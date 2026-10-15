@@ -495,7 +495,6 @@ function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serv
       {!recording&&<p className="text-[11px] text-gray-500">Gravação parada. Consulte os arquivos em Gravar → Busca e exportação.</p>}
       <RecordingProgress channels={channels} serverTime={serverTime} compact/>
       <SampleRecordingStatus/>
-      <p className="text-[10px] text-gray-400">Dados da gravação contínua: {(channels[0] as any)?.metadataError??((channels[0] as any)?.metadataRunning?'salvando tabelas, EPG e CC em texto (.txt)':recording?'verifique o modo e a entrada em Gravar':'aguardando ativação da gravação')}</p>
     </div>
   );
 }
@@ -2186,7 +2185,7 @@ export default function MonitorAoVivo() {
             )}
           </div>
 
-          <RecordingBlocks data-testid="RecordingBlocks" blocks={blocks} recording={recording} codec={recordingService.channels[0]?.codec==='copy'?'TS/BTS original':'Vídeo leve + dados'} onConfigure={()=>setMultichannelOpen(true)} channels={recordingService.channels} serverTime={recordingService.serverTime}/>
+          <RecordingBlocks data-testid="RecordingBlocks" blocks={blocks} recording={recording} codec={recordingService.channels[0]?.codec==='copy'?'TS/BTS original':'Gravação de vídeo'} onConfigure={()=>setMultichannelOpen(true)} channels={recordingService.channels} serverTime={recordingService.serverTime}/>
 
           {/* Scopes / BTS */}
           <div data-testid="panel-tables" className="md:col-span-2 bg-[#0f1117] border border-[#1e2332] rounded-lg overflow-hidden flex flex-col">
