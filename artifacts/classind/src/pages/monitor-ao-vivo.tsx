@@ -1,3 +1,4 @@
+import {SampleRecordingStatus} from '@/components/bts-samples';
 import { OperationalReports } from '@/components/operational-reports';
 import { SystemStatusBar } from '@/components/system-status-bar';
 import { RecordingStorage } from '@/components/recording-storage';
@@ -493,6 +494,7 @@ function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serv
       </div>
       {!recording&&<p className="text-[11px] text-gray-500">Gravação parada. Consulte os arquivos em Gravar → Busca e exportação.</p>}
       <RecordingProgress channels={channels} serverTime={serverTime} compact/>
+      <SampleRecordingStatus/>
     </div>
   );
 }

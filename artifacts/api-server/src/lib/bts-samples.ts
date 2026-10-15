@@ -4,6 +4,7 @@ import {resolve,dirname,relative,isAbsolute,sep,join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {initRecordings,status} from './recordings.ts';
 import {captureBtsWindows,type BtsSample} from './bts-window.ts';
+import {videoEncoder,encoderOptions,hardwareFailure} from './video-acceleration.ts';
 const root=resolve('.runtime/recording-service/bts-samples');
 let config={enabled:false,directory:''};
 let lastSample:BtsSample|null=null,completed=0,error:string|null=null,retryAt=0,currentSample:string|null=null;
@@ -16,7 +17,7 @@ export function separateSampleFolder(directory:string,recordingDirectory?:string
  return resolve(directory);
 }
 function save(){saving=saving.catch(()=>{}).then(async()=>{await mkdir(root,{recursive:true});await writeFile(join(root,'state.json.tmp'),JSON.stringify({config,lastSample,completed}),{mode:0o600});await rename(join(root,'state.json.tmp'),join(root,'state.json'));});return saving;}
-export function btsSamplesStatus(){const channel=status().channels[0];return {config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5};}
+export function btsSamplesStatus(){const channel=status().channels[0];return {config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5,videoKbps:200,audioKbps:64,format:'mpegts'};}
 async function stop(){const worker=run;if(!worker)return;worker.stopping=true;worker.process.stdin?.write('q\n');const force=setTimeout(()=>worker.process.kill('SIGKILL'),2500);try{await worker.done;}finally{clearTimeout(force);if(run===worker)run=undefined;currentSample=null;}}
 async function tick(){
  if(busy||shutdown)return;busy=true;
@@ -31,8 +32,10 @@ async function tick(){
   await mkdir(config.directory,{recursive:true});const fs=await statfs(config.directory);
   if(fs.blocks&&fs.bavail/fs.blocks<=0.1){error='Captura BTS suspensa: o HD tem 10% ou menos de espaço livre.';retryAt=Date.now()+30000;return;}
   const url=new URL(channel.url);if(url.protocol==='srt:')url.searchParams.set('latency',String(Math.max(Number(url.searchParams.get('latency'))||0,1000000)));if(url.protocol==='udp:')url.searchParams.set('reuse','1');
-  const process=spawn('ffmpeg',['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url.toString(),'-map','0:0','-c','copy','-f','data','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
-  let stderr='';process.stdin?.on('error',()=>{});process.stderr?.on('data',value=>{stderr=(stderr+value.toString()).slice(-1000);});process.on('error',()=>{error='Não foi possível iniciar o receptor de amostras BTS.';});
+  const encoder=await videoEncoder('h264');
+  const program=channel.programId?`p:${channel.programId}:`:'';
+  const process=spawn('ffmpeg',['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-i',url.toString(),'-map',`0:${program}v:0`,'-map',`0:${program}a:0?`,'-vf','scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1',...encoderOptions('h264',encoder),'-b:v','200k','-maxrate','200k','-bufsize','400k','-r','25','-g','12','-force_key_frames','expr:gte(t,n_forced*0.5)','-c:a','aac','-b:a','64k','-ac','2','-ar','48000','-mpegts_flags','+resend_headers','-f','mpegts','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
+  let stderr='';process.stdin?.on('error',()=>{});process.stderr?.on('data',value=>{stderr=(stderr+value.toString()).slice(-1000);hardwareFailure('h264',stderr);});process.on('error',()=>{error='Não foi possível iniciar o receptor de amostras BTS.';});
   const worker={process,signature,stopping:false,receivedAt:Date.now(),done:Promise.resolve()};run=worker;
   worker.done=captureBtsWindows(process.stdout!,config.directory,async sample=>{lastSample=sample;completed++;error=null;await save();},()=>{worker.receivedAt=Date.now();},path=>{currentSample=path;})
    .catch(e=>{if(!worker.stopping)error=e instanceof Error?e.message:'Falha ao salvar BTS.';process.kill('SIGTERM');})
