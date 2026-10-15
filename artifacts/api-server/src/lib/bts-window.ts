@@ -11,7 +11,7 @@ export function btsSamplePath(directory:string,date:Date){
  const day=p('day')+p('month')+p('year');
  return join(directory,p('year'),p('month'),day,`freme${day}-${p('hour')}h${p('minute')}s${p('second')}.ts`);
 }
-export async function captureBtsWindows(input:Readable,directory:string,onComplete:(sample:BtsSample)=>Promise<void>,onReceived:()=>void=()=>{},onActive:(path:string|null)=>void=()=>{},now=Date.now){
+export async function captureBtsWindows(input:Readable,directory:string,onComplete:(sample:BtsSample)=>Promise<void>,onReceived:()=>void=()=>{},onActive:(path:string|null)=>void=()=>{},now=Date.now,intervalMs=30000){
  let pending=Buffer.alloc(0),size:number|null=null,nextStart:number|undefined;
  let active:{file:Awaited<ReturnType<typeof open>>;temporary:string;destination:string;start:number;end:number;bytes:number;lastData:number}|undefined;
  let timer:ReturnType<typeof setTimeout>|undefined,queue=Promise.resolve();
@@ -33,10 +33,10 @@ export async function captureBtsWindows(input:Readable,directory:string,onComple
     const length=Math.floor(pending.length/size)*size;if(!length)return;
     const original=pending.subarray(0,length);pending=Buffer.from(pending.subarray(length));
     const data=size===188?original:Buffer.concat(Array.from({length:length/size},(_,index)=>original.subarray(index*size!+(size===192?4:0),index*size!+(size===192?4:0)+188)));
-    const time=now();nextStart??=Math.ceil(time/30000)*30000;
+    const time=now();nextStart??=Math.ceil(time/intervalMs)*intervalMs;
     if(active&&time>=active.end)await close();
     if(!active&&time>=nextStart){
-     const boundary=nextStart;nextStart=(Math.floor(time/30000)+1)*30000;
+     const boundary=nextStart;nextStart=(Math.floor(time/intervalMs)+1)*intervalMs;
      if(time-boundary>1000)return;
      const fs=await statfs(directory);if(fs.blocks&&fs.bavail/fs.blocks<=0.1)throw new Error('Captura BTS suspensa: o HD tem 10% ou menos de espaço livre.');
      const destination=btsSamplePath(directory,new Date(boundary));
@@ -51,3 +51,5 @@ export async function captureBtsWindows(input:Readable,directory:string,onComple
   }
  }finally{if(timer)clearTimeout(timer);await enqueue(close);}
 }
+
+export function isVideoSampleTime(time:number){return Math.floor(time/60000)%4===0;}

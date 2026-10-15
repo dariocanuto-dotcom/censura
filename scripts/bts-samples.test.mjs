@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
 import {mkdtemp,mkdir,readFile,readdir} from 'node:fs/promises';
 import {resolve,join,basename} from 'node:path';
-import {captureBtsWindows,btsSamplePath} from '../artifacts/api-server/src/lib/bts-window.ts';
+import {captureBtsWindows,btsSamplePath,isVideoSampleTime} from '../artifacts/api-server/src/lib/bts-window.ts';
 import {separateSampleFolder} from '../artifacts/api-server/src/lib/bts-samples.ts';
 const base=Date.parse('2026-10-15T11:24:30-03:00');
 function packets(size,value){const data=Buffer.alloc(size*8,value);for(let i=0;i<8;i++)data[i*size+(size===192?4:0)]=0x47;return data;}
@@ -36,4 +36,14 @@ test('amostra interrompida não recebe extensão final BTS',async()=>{
 });
 test('rejeita pastas dentro da gravação contínua e aceita pasta irmã',()=>{
  const root=resolve('gravacoes');assert.throws(()=>separateSampleFolder(root,root));assert.throws(()=>separateSampleFolder(join(root,'bts'),root));assert.throws(()=>separateSampleFolder(resolve('.'),root));assert.equal(separateSampleFolder(resolve('amostras_bts'),root),resolve('amostras_bts'));assert.throws(()=>separateSampleFolder('relativa',root));
+});
+
+test('captura em minutos independentes para fotos e seleciona vídeo somente a cada quatro minutos',async()=>{
+ const root=await temporary(),completed=[];const start=Date.parse('2026-10-15T11:24:00-03:00');let clock=start,index=0;
+ const times=[0,4900,5000,30000,60000,64900,65000,120000,124900,125000,180000,184900,185000,240000,244900,245000];
+ const stream=Readable.from(times.map(()=>packets(188,3)));
+ await captureBtsWindows(stream,root,async file=>{completed.push(file);},()=>{clock=start+times[index++];},()=>{},()=>clock,60000);
+ assert.equal(completed.length,5);
+ assert.deepEqual(completed.map(f=>isVideoSampleTime(Date.parse(f.start))),[true,false,false,false,true]);
+ assert.equal(basename(completed[1].path),'freme15102026-11h25s00.ts');
 });
