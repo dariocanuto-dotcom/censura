@@ -1,3 +1,4 @@
+import {metadataRecording} from './metadata-recording.ts';
 import { videoEncoder, encoderOptions, hardwareFailure } from './video-acceleration.ts';
 import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { startNdi, stopNdi } from './ndi.ts';
@@ -16,7 +17,7 @@ export interface ChannelConfig {
 }
 export interface RecordingFile { id: string; channelId: string; channel: string; path: string; start: string; end: string; bytes: number; codec: string; format: string; programId?:number }
 interface Store { channels: ChannelConfig[]; files: RecordingFile[]; audit: { time: string; channelId: string; action: string; detail: string }[] }
-interface Running { lastProgress:number; progressKey?:string; root?: string; ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
+interface Running { metadata?:ReturnType<typeof metadataRecording>;metadataRetryAt?:number; lastProgress:number; progressKey?:string; root?: string; ndi?: Awaited<ReturnType<typeof startNdi>>; process: ChildProcess; csv: string; config: ChannelConfig; started: number; error: string; seen: Set<string>; stopping: boolean; rawCompletion?:Promise<void>; prefix?:string; activeBlock?:{name:string;start:string;end:string;bytes:number} }
 const stateDir = resolve('.runtime/recording-service');
 const stateFile = join(stateDir, 'state.json');
 let state: Store = { channels: [], files: [], audit: [] };
@@ -132,6 +133,12 @@ export function recordingArgs(config: ChannelConfig, root: string, csv: string, 
     ...(config.format === 'mp4' ? ['-segment_format_options','movflags=+faststart'] : []),
     '-segment_list',csv,'-segment_list_type','csv','-segment_list_size','0',filename];
 }
+function ensureMetadata(item:Running){
+ if(item.stopping||item.config.codec==='copy'||! /^(srt|udp|rtp):/.test(item.config.url)||item.metadata?.active||Date.now()<(item.metadataRetryAt??0))return;
+ const url=new URL(item.config.url);if(url.protocol==='srt:')url.searchParams.set('latency',String(Math.max(Number(url.searchParams.get('latency'))||0,1000000)));if(url.protocol==='udp:')url.searchParams.set('reuse','1');
+ item.metadata=metadataRecording(url.toString(),date=>recordingRoot(item.config,date),item.config.blockMinutes??10,`${channelSlug(item.config.name)}_dados_`,async file=>{state.files.push({...file,id:randomUUID(),channelId:item.config.id,channel:item.config.name+' · Dados originais',programId:item.config.programId,codec:'dados',format:'ts'});await save();});
+ void item.metadata.done.then(()=>{item.metadataRetryAt=Date.now()+5000;});
+}
 async function start(config: ChannelConfig) {
   if(config.captureMode==='pvw')await writeFile(join(stateDir,'pvw-cc.txt'),'','utf8');
   const root = await dailyFolders(config);
@@ -147,6 +154,7 @@ async function start(config: ChannelConfig) {
   const proc = spawn('ffmpeg', args, { windowsHide: true, env: { ...process.env, TZ: 'BRT3' }, stdio: ['pipe',raw?'pipe':'ignore','pipe'] });
   const item: Running = { root, ndi, process: proc, config, csv, started: Date.now(), lastProgress: Date.now(), error: '', seen: new Set(), stopping: false, prefix:basename(args.at(-1)!).split('%')[0] };
   running.set(config.id, item);
+  ensureMetadata(item);
   if(ndi) {
     ndi.stdout.pipe(proc.stdin!);
     ndi.stderr.on('data', value => { item.error=(item.error+value.toString()).slice(-3000); });
@@ -162,6 +170,7 @@ async function start(config: ChannelConfig) {
   proc.stderr?.on('data', chunk => { item.error = (item.error + chunk.toString()).slice(-3000); });
   proc.on('error', error => { item.error = error.message; lastErrors.set(config.id, item.error); });
   proc.on('close', () => {
+    void item.metadata?.stop();
     if(encoder?.endsWith('_nvenc')&&!item.stopping)hardwareFailure(config.codec==='h265'?'h265':'h264',item.error);
     if(!item.stopping) void (item.rawCompletion??ingest(item)).then(save).catch(() => {});
     if (running.get(config.id) === item) running.delete(config.id);
@@ -172,6 +181,7 @@ async function start(config: ChannelConfig) {
 async function stop(id: string) {
   const item = running.get(id); if (!item) return;
   item.stopping = true;
+  await item.metadata?.stop();
   await new Promise<void>(resolveStop => {
     const timeout = setTimeout(() => { item.process.kill(); }, 10000);
     item.process.once('close', () => { clearTimeout(timeout); resolveStop(); });
@@ -272,6 +282,7 @@ async function tick() {
   if (busy || shuttingDown) return; busy = true;
   try {
     for (const item of running.values()) {
+      ensureMetadata(item);
       await dailyFolders(item.config);
       if(!item.rawCompletion){
         await ingest(item); await updateActiveBlock(item);
@@ -312,7 +323,7 @@ async function configureChannelInternal(input: ChannelConfig) {
   lastErrors.delete(config.id); retryAfter.delete(config.id); audit(config.id,'configure',`Retenção ${config.retentionDays} dias; reserva 10%`);
   await save(); await tick(); return status();
 }
-export function status() { return { serverTime: new Date().toISOString(), channels: state.channels.map(c => ({ ...c, activeBlock:running.get(c.id)?.activeBlock ?? null, running: running.has(c.id), error: lastErrors.get(c.id) ?? null, estimatedBlockMB: c.format==='ts'?null:(c.videoKbps+c.audioKbps)*(c.blockMinutes ?? 2)*60/8000, estimatedDayGB: c.format==='ts'?null:(c.videoKbps+c.audioKbps)*86400/8000000 })), files: state.files.map(({ path, ...file }) => file), audit: state.audit.slice(-100), reservePercent: 10 }; }
+export function status() { return { serverTime: new Date().toISOString(), channels: state.channels.map(c => ({ ...c, metadataRunning:running.get(c.id)?.metadata?.active??false,metadataError:running.get(c.id)?.metadata?.error??null,metadataSupported:/^(srt|udp|rtp):/.test(c.url),activeBlock:running.get(c.id)?.activeBlock ?? null, running: running.has(c.id), error: lastErrors.get(c.id) ?? null, estimatedBlockMB: c.format==='ts'?null:(c.videoKbps+c.audioKbps)*(c.blockMinutes ?? 2)*60/8000, estimatedDayGB: c.format==='ts'?null:(c.videoKbps+c.audioKbps)*86400/8000000 })), files: state.files.map(({ path, ...file }) => file), audit: state.audit.slice(-100), reservePercent: 10 }; }
 export function getRecording(id: string) { return state.files.find(file => file.id === id); }
 export async function deleteRecordings(ids: string[]) {
   if(!Array.isArray(ids)||!ids.length||ids.length>500||ids.some(id=>typeof id!=='string'))throw new Error('Selecione de 1 a 500 blocos.');

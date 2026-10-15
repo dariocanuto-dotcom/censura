@@ -1,3 +1,4 @@
+import {samplePair} from './sample-pair.ts';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {mkdir,readFile,writeFile,rename,open,unlink,statfs} from 'node:fs/promises';
 import {resolve,dirname,relative,isAbsolute,sep,join} from 'node:path';
@@ -16,7 +17,7 @@ export function separateSampleFolder(directory:string,recordingDirectory?:string
  return resolve(directory);
 }
 function save(){saving=saving.catch(()=>{}).then(async()=>{await mkdir(root,{recursive:true});await writeFile(join(root,'state.json.tmp'),JSON.stringify({config,lastSample,completed}),{mode:0o600});await rename(join(root,'state.json.tmp'),join(root,'state.json'));});return saving;}
-export function btsSamplesStatus(){const channel=status().channels[0];return {config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5,mode:"original",format:"mpegts"};}
+export function btsSamplesStatus(){const channel=status().channels[0];return {config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5,mode:"video-and-data",videoKbps:200,audioKbps:64,format:"mpegts"};}
 async function stop(){const worker=run;if(!worker)return;worker.stopping=true;worker.process.stdin?.write('q\n');const force=setTimeout(()=>worker.process.kill('SIGKILL'),2500);try{await worker.done;}finally{clearTimeout(force);if(run===worker)run=undefined;currentSample=null;}}
 async function tick(){
  if(busy||shutdown)return;busy=true;
@@ -25,7 +26,7 @@ async function tick(){
   if(!config.enabled){await stop();return;}
   if(!channel||!btsSamplesStatus().sourceSupported){await stop();error='Amostras BTS originais exigem uma entrada SRT, UDP ou RTP configurada em Gravar.';return;}
   separateSampleFolder(config.directory,channel.directory);
-  const signature=JSON.stringify([channel.url,config.directory]);
+  const signature=JSON.stringify([channel.url,channel.programId,config.directory]);
   if(run&&(run.signature!==signature||Date.now()-run.receivedAt>15000)){await stop();retryAt=Date.now()+5000;}
   if(run||Date.now()<retryAt)return;
   await mkdir(config.directory,{recursive:true});const fs=await statfs(config.directory);
@@ -34,7 +35,7 @@ async function tick(){
   const process=spawn('ffmpeg',['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url.toString(),'-map','0:0','-c','copy','-f','data','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
   let stderr='';process.stdin?.on('error',()=>{});process.stderr?.on('data',value=>{stderr=(stderr+value.toString()).slice(-1000);});process.on('error',()=>{error='Não foi possível iniciar o receptor de amostras BTS.';});
   const worker={process,signature,stopping:false,receivedAt:Date.now(),done:Promise.resolve()};run=worker;
-  worker.done=captureBtsWindows(process.stdout!,config.directory,async sample=>{lastSample=sample;completed++;error=null;await save();},()=>{worker.receivedAt=Date.now();},path=>{currentSample=path;})
+  worker.done=captureBtsWindows(process.stdout!,config.directory,async sample=>{lastSample=await samplePair(sample,channel.programId);completed++;error=null;await save();},()=>{worker.receivedAt=Date.now();},path=>{currentSample=path;})
    .catch(e=>{if(!worker.stopping)error=e instanceof Error?e.message:'Falha ao salvar BTS.';process.kill('SIGTERM');})
    .finally(async()=>{if(!worker.stopping){error??=stderr?'A entrada BTS foi interrompida; tentando reconectar.':'O receptor BTS encerrou; tentando reconectar.';retryAt=Date.now()+5000;}if(run===worker)run=undefined;currentSample=null;await save();}).catch(e=>{error=e instanceof Error?e.message:'Falha ao persistir o estado BTS.';});
  }catch(e){await stop();error=e instanceof Error?e.message:'Falha nas amostras BTS.';retryAt=Date.now()+5000;}finally{busy=false;}
