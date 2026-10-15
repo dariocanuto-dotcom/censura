@@ -1,3 +1,4 @@
+import {eitTransport} from '../lib/eit-transport.ts';
 import {networkInputUrl} from '../lib/network-input.ts';
 import {latestBtsDataForSource} from '../lib/bts-samples.ts';
 import { previewKey, previewCopyAllowed, rememberPreviewFormat } from '../lib/preview-format.ts';
@@ -27,6 +28,11 @@ interface StreamSession {
   eit?: ReturnType<typeof createEitCollector>;
   eitOffset?: number;
   eitSamplePath?: string;
+  eitProcess?: ReturnType<typeof spawn>;
+  eitRetryAt?: number;
+  inputUrl?: string;
+  eitSeen?: boolean;
+  eitBytes?: number;
   dir: string;
   process: ReturnType<typeof spawn>;
   createdAt: number;
@@ -415,8 +421,8 @@ router.post("/epg", async (req, res): Promise<void> => {
     const args = [
       "-hide_banner", "-loglevel", "error",
       "-timeout", "10000000",
-      "-i", url,
-      "-map", "0:i:18",
+      "-f", "data", "-i", networkInputUrl(url),
+      "-map", "0:0",
       "-c", "copy",
       "-t", String(duration),
       "-f", "data",
@@ -434,7 +440,7 @@ router.post("/epg", async (req, res): Promise<void> => {
       proc.kill("SIGKILL");
       finish({ ok: true, estado: collector.result().length ? "capturado" : "sem_epg", erro: null, eventos: collector.result() });
     }, (duration + 8) * 1000);
-    proc.stdout.on("data", (chunk: Buffer) => collector.push(chunk));
+    proc.stdout.on("data", eitTransport(section=>collector.push(section)));
     proc.stderr.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString()}`.slice(-8000); });
     proc.on("error", error => {
       clearTimeout(timer);
@@ -462,7 +468,7 @@ router.post("/epg", async (req, res): Promise<void> => {
   res.status(result.ok ? 200 : 502).json({ ...result, temEit: result.eventos.length > 0 });
 });
 
-function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false, recordingDirectory?: string, encoder='libx264') {
+function streamArgs(url: string, outputDir: string, programId?: number, captureMetadata = false, recordingDirectory?: string, encoder='libx264',captionPid=278) {
   const videoMap = programId !== undefined ? `0:p:${programId}:v:0?` : "0:v:0";
   const audioMap = programId !== undefined ? `0:p:${programId}:a:0?` : "0:a:0?";
   return [
@@ -483,7 +489,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     "-hls_segment_filename", join(outputDir, "segment_%05d.ts"),
     join(outputDir, "index.m3u8"),
     ...(recordingDirectory ? ["-map", videoMap, "-map", audioMap, "-map", "0:s?", "-c", "copy", "-f", "segment", "-segment_time", "600", "-reset_timestamps", "1", join(recordingDirectory, `${Date.now()}_%05d.ts`)] : []),
-    ...(captureMetadata ? ["-map", "0:i:278", "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass")] : []),
+    ...(captureMetadata ? ["-map", `0:i:${captionPid}`, "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass")] : []),
     '-map',audioMap,'-vn','-c:a','pcm_s16le','-ar','8000','-f','s16le','-flush_packets','1','pipe:1',
   ];
 }
@@ -605,11 +611,22 @@ async function waitForManifest(path: string, process: ReturnType<typeof spawn>, 
   return false;
 }
 
+function startEitReceiver(session:StreamSession){
+ if(!session.inputUrl?.startsWith('udp:')&&!session.inputUrl?.startsWith('rtp:'))return;
+ if(session.eitProcess?.exitCode===null||Date.now()<(session.eitRetryAt??0))return;
+ session.eit??=createEitCollector();
+ const child=spawn('ffmpeg',['-hide_banner','-loglevel','error','-rw_timeout','8000000','-f','data','-i',session.inputUrl!,'-map','0:0','-c','copy','-f','data','pipe:1'],{windowsHide:true,stdio:['ignore','pipe','ignore']});session.eitProcess=child;
+ child.stdout.on('data',chunk=>{session.eitBytes=(session.eitBytes??0)+chunk.length;});
+ child.stdout.on('data',eitTransport(section=>session.eit!.push(section),()=>{session.eitSeen=true;}));
+ child.on('error',()=>{session.eitRetryAt=Date.now()+5000;});child.on('close',()=>{session.eitRetryAt=Date.now()+5000;});
+}
+
 async function stopStream(id: string) {
   const session = streamSessions.get(id);
   if (!session) return;
   streamSessions.delete(id);
   if (session.idleTimer) clearInterval(session.idleTimer);
+  session.eitProcess?.kill("SIGKILL");
   if (session.ndi) stopNdi(session.ndi);
   if (!session.process.killed) session.process.kill("SIGTERM");
   setTimeout(() => {
@@ -693,9 +710,18 @@ router.post("/stream", async (req, res): Promise<void> => {
     : undefined;
   const formatKey=previewKey(url,selectedProgramId);
   const encoder=await previewCopyAllowed(formatKey)?'copy':await videoEncoder('h264');
-  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, !ndi && captureMetadata === true, recordingDirectory,encoder), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
+  let captionPid:number|undefined;
+  if(!ndi&&captureMetadata){
+    const probe=await ffprobe(url,8000);
+    const firstVideo=probe.streams.find(stream=>stream.tipo==='video');
+    const selected=selectedProgramId!==undefined?probe.canais.find(channel=>channel.programaId===selectedProgramId):probe.canais.find(channel=>channel.streams?.includes(firstVideo?.index??-1));
+    const caption=probe.streams.find(stream=>/arib|caption/i.test(stream.codec)&&selected?.streams?.includes(stream.index));
+    if(caption?.id!==undefined)captionPid=Number(caption.id);
+  }
+  const proc = spawn("ffmpeg", streamArgs(url, outputDir, selectedProgramId, captionPid!==undefined, recordingDirectory,encoder,captionPid), { stdio: [ndi ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
   const session: StreamSession = { id, key, encoder, formatKey, consumers:new Set([consumer]), reusable:true, dir: outputDir, process: proc, createdAt: Date.now(), lastSeen: Date.now(), lastError: null, ndi };
   streamSessions.set(id, session);
+  if(captureMetadata){session.inputUrl=url;startEitReceiver(session);}
 
   let stderr = "";
   if (ndi) {
@@ -785,6 +811,7 @@ router.get('/stream/:id/audio',(req,res)=>{
 router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
   const session = streamSessions.get(String(req.params.id));
   if (!session) { res.status(404).json({ ok: false }); return; }
+  startEitReceiver(session);
   const captionFile=await open(join(session.dir,"captions.ass"),'r').catch(()=>null);
   let captions='',captionRevision=0;
   if(captionFile)try{
@@ -807,7 +834,7 @@ router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
     const info=await stat(sample).catch(()=>null);
     if(info&&info.size<=10000000){const data=await readFile(sample).catch(()=>null);if(data){for(let i=0;i+188<=data.length;i+=188){const p=data.subarray(i,i+188);if(p[0]!==71||(((p[1]&31)<<8)|p[2])!==18||!(p[3]&16))continue;let offset=4;if(p[3]&32)offset+=1+p[4];if(offset>=188)continue;if(p[1]&64){const pointer=p[offset++];if(pointer)session.eit.push(p.subarray(offset,offset+pointer));offset+=pointer;}if(offset<188)session.eit.push(p.subarray(offset));}session.eitSamplePath=sample;}}
   }
-  res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision, linhas: parseAssDialogue(captions, false).slice(-30), eventos: session.eit.result(), erro: session.lastError });
+  res.json({ ok: true, epgAviso:session.eitProcess&&(session.eitBytes??0)>0&&Date.now()-session.createdAt>10000&&!session.eitSeen?'O sinal UDP está chegando, mas não foi detectado o PID 18 (EPG/EIT) na transmissão.':null, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision, linhas: parseAssDialogue(captions, false).slice(-30), eventos: session.eit.result(), erro: session.lastError });
 });
 
 router.get("/stream/:id/status", async (req, res): Promise<void> => {

@@ -1,3 +1,4 @@
+import {networkInputUrl} from '../lib/network-input.ts';
 import { Router } from "express";
 import { spawn } from "node:child_process";
 
@@ -87,7 +88,7 @@ router.post("/captions", async (req, res) => {
       "-sub_type", "ass",              // mantém as caixas/linhas como ASS para o muxer
       "-caption_encoding", "latin",    // SBTVD / ISDB-Tb do Brasil
       "-t", String(dur),                // limita a leitura do transporte
-      "-i", url,
+      "-i", networkInputUrl(url),
       "-map", aribStreamMap(programId, captionStreamIndex, captionPid), // aceita PID MPEG-TS ou índice exato detectado pelo ffprobe
       "-c:s", "ass",                   // libaribcaption é decoder; ASS é o formato de saída
       "-f", "ass",                     // output as ASS subtitles

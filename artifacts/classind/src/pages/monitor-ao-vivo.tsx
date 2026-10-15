@@ -1010,6 +1010,7 @@ function SrtTestDialog({ open, onOpenChange, source }: {
   open: boolean; onOpenChange: (v: boolean) => void; source: SignalSource | null;
 }) {
   const srt = source?.srt;
+  const isUdp=source?.tipo==='udp';
   const [host, setHost] = useState(srt?.host ?? "");
   const [port, setPort] = useState(String(srt?.port ?? 9000));
   const [mode, setMode] = useState<"caller"|"listener">(srt?.mode ?? "caller");
@@ -1022,24 +1023,24 @@ function SrtTestDialog({ open, onOpenChange, source }: {
 
   // Sync fields when source changes or dialog opens
   useEffect(() => {
-    if (open && srt) {
-      setHost(srt.host ?? "");
-      setPort(String(srt.port ?? 9000));
-      setMode(srt.mode ?? "caller");
-      setLatency(String(srt.latencyMs ?? 120));
-      setPassphrase(srt.passphrase ?? "");
-      setStreamId(srt.streamId ?? "");
+    if (open && (srt||source?.udp)) {
+      setHost(isUdp?source?.udp?.address??'':srt?.host??'');
+      setPort(String(isUdp?source?.udp?.port??5004:srt?.port??9000));
+      setMode(srt?.mode ?? "caller");
+      setLatency(String(srt?.latencyMs ?? 120));
+      setPassphrase(srt?.passphrase ?? "");
+      setStreamId(srt?.streamId ?? "");
       setResult(null);
     }
-  }, [open, srt]);
+  }, [open, srt, source?.udp, isUdp]);
 
   const runProbe = async () => {
     if (!host || !port) return;
     setLoading(true); setResult(null);
     try {
-      const res = await fetch("/api/srt/probe", {
+      const res = await fetch(isUdp?"/api/srt/probe-url":"/api/srt/probe", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ host, port: parseInt(port), mode, latencyMs: parseInt(latency), passphrase: passphrase||undefined, streamId: streamId||undefined, timeoutMs: parseInt(timeout) }),
+        body: JSON.stringify(isUdp?{url:udpInputUrl({...source!.udp!,address:host,port:Number(port)}),timeoutMs:Number(timeout)}:{ host, port: parseInt(port), mode, latencyMs: parseInt(latency), passphrase: passphrase||undefined, streamId: streamId||undefined, timeoutMs: parseInt(timeout) }),
       });
       const data = await res.json() as SrtProbeResult;
       setResult(data);
@@ -1048,14 +1049,14 @@ function SrtTestDialog({ open, onOpenChange, source }: {
     } finally { setLoading(false); }
   };
 
-  const srtUrl = host && port ? `srt://${host}:${port}?mode=${mode}&latency=${parseInt(latency)*1000}${passphrase?`&passphrase=***`:""}${streamId?`&streamid=${streamId}`:""}` : "";
+  const srtUrl = isUdp&&source?.udp?udpInputUrl({...source.udp,address:host,port:Number(port)}):host && port ? `srt://${host}:${port}?mode=${mode}&latency=${parseInt(latency)*1000}${passphrase?`&passphrase=***`:""}${streamId?`&streamid=${streamId}`:""}` : "";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-[#0f1117] border-[#1e2332] text-white max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-white flex items-center gap-2">
-            <Wifi className="h-4 w-4 text-blue-400"/>Teste de Sinal SRT
+            <Wifi className="h-4 w-4 text-blue-400"/>Teste de Sinal {isUdp?'UDP':'SRT'}
             {source && <span className="text-xs text-gray-500 font-normal">— {source.nome}</span>}
           </DialogTitle>
         </DialogHeader>
@@ -1075,6 +1076,7 @@ function SrtTestDialog({ open, onOpenChange, source }: {
           <FRow label="Porta">
             <Input type="number" value={port} onChange={e=>setPort(e.target.value)} className={iCls} placeholder="9000" data-testid="srt-port"/>
           </FRow>
+          {!isUdp&&<>
           <FRow label="Modo">
             <Select value={mode} onValueChange={v=>setMode(v as "caller"|"listener")}>
               <ST data-testid="srt-mode"><SelectValue /></ST>
@@ -1090,6 +1092,7 @@ function SrtTestDialog({ open, onOpenChange, source }: {
           <FRow label="Stream ID">
             <Input value={streamId} onChange={e=>setStreamId(e.target.value)} className={iCls} placeholder="dccp/main (opcional)" data-testid="srt-streamid"/>
           </FRow>
+          </>}
           <FRow label="Timeout do Probe">
             <Select value={timeout} onValueChange={setTimeout_}>
               <ST><SelectValue /></ST>
@@ -1102,7 +1105,7 @@ function SrtTestDialog({ open, onOpenChange, source }: {
         <div className="flex items-center gap-3">
           <button onClick={runProbe} disabled={loading || !host}
             className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-md transition-colors" data-testid="btn-srt-probe">
-            {loading ? <><Loader2 className="h-3.5 w-3.5 animate-spin"/>Conectando via ffprobe...</> : <><Signal className="h-3.5 w-3.5"/>Testar Conexão SRT</>}
+            {loading ? <><Loader2 className="h-3.5 w-3.5 animate-spin"/>Conectando via ffprobe...</> : <><Signal className="h-3.5 w-3.5"/>Testar Conexão {isUdp?'UDP':'SRT'}</>}
           </button>
           {result && !loading && (
             <div className={`flex items-center gap-1.5 text-xs font-semibold ${result.ok ? "text-teal-400" : "text-red-400"}`}>
@@ -1324,6 +1327,7 @@ export default function MonitorAoVivo() {
 
 
   const source = sources[Math.min(sourceIdx, sources.length - 1)] ?? sources[0];
+  const isBtsTransport=source?.tipo==='srt'||source?.tipo==='udp';
   useEffect(()=>{if(source)localStorage.setItem('dccp-selected-source',source.id);},[source?.id]);
   const fps = source ? srcFps(source) : 29.97;
 
@@ -1446,11 +1450,10 @@ export default function MonitorAoVivo() {
         body: JSON.stringify({
           url,
           durationSec,
-          ...(source?.tipo === "srt" || source?.tipo === "udp" ? { captionPid: 278 } : {}),
-          ...(source?.tipo === "srt"
+          ...((source?.tipo === "srt" || source?.tipo === "udp")
             ? (() => {
-                const captionStream = srtProbe?.streams.find(stream => stream.codec.toLowerCase() === "arib_caption");
-                return captionStream ? { captionStreamIndex: captionStream.index } : {};
+                const captionStream = srtProbe?.streams.find(stream => stream.codec.toLowerCase() === "arib_caption" && (!srtProbe.canal?.streams?.length || srtProbe.canal.streams.includes(stream.index)));
+                return captionStream?.id!==undefined ? {captionPid:Number(captionStream.id)} : {};
               })()
             : {}),
           ...((source?.tipo === "srt" || source?.tipo === "udp") && source.id && (srtProgramBySource[source.id] ?? srtProbe?.canal?.programaId) !== undefined
@@ -1576,7 +1579,7 @@ export default function MonitorAoVivo() {
             ...currentSrt,
             consumerId,
             ...(currentSource.tipo === "ndi" && (currentSource.network?.native ?? !currentSource.network?.url) ? {ndiSource:currentSource.network?.sourceName ?? ""} : currentSource.tipo === "udp" && currentSource.udp ? {url:udpInputUrl(currentSource.udp)} : currentSource.tipo !== "srt" ? {url:currentSource.network?.url ?? ""} : {}),
-            captureMetadata: currentSource.tipo === "srt",
+            captureMetadata: currentSource.tipo === "srt" || currentSource.tipo === "udp",
             ...(srtProgramBySource[currentSource.id] !== undefined
               ? { programId: srtProgramBySource[currentSource.id] }
               : {}),
@@ -1674,7 +1677,7 @@ export default function MonitorAoVivo() {
           const response = await fetch(`/api/srt/stream/${sessionId}/metadata`);
           const data = await response.json();
           if (!cancelled && sessionId === srtSessionId.current && response.ok && data.ok) {
-            if (data.eventos?.length) { setEpgEvents(data.eventos); setEpgError(null); }
+            if (data.eventos?.length) { setEpgEvents(data.eventos); setEpgError(null); } else if(data.epgAviso){setEpgError(data.epgAviso);}
             if (data.linhas?.length && data.linhas.at(-1) !== lastCaptionRevision) {
               lastCaptionRevision = data.linhas.at(-1);
               clearTimeout(clearCaptionTimer);
@@ -1729,27 +1732,27 @@ export default function MonitorAoVivo() {
   useEffect(() => { if (prevSignal.current && !signalActive && config.notifyVideoLoss) addAndSend("video","Falha de Vídeo",`Sinal de vídeo interrompido em: ${source?.nome}. Verifique a conexão SDI/SRT/UDP.`); prevSignal.current=signalActive; }, [signalActive, config.notifyVideoLoss, source?.nome, addAndSend]);
   useEffect(() => { if (prevCC.current && !ccActive && signalActive && config.notifyCCLoss) addAndSend("closed_caption","Falha de Closed Caption",`CC ausente em: ${source?.nome}. Verificar PID 0x03EC (CEA-708).`); prevCC.current=ccActive; }, [ccActive, signalActive, config.notifyCCLoss, source?.nome, addAndSend]);
   useEffect(() => {
-    if (source?.tipo !== "srt" || !srtProbe || srtProbeLoading) return;
+    if (!isBtsTransport || !srtProbe || srtProbeLoading) return;
     const key = `video:${source.id}`;
     const failed = !srtProbe.ok || !srtVideoStream;
     if (failed && config.notifyVideoLoss) {
-      notifyIncident(key, "video", "Falha de Vídeo SRT", `O programa ${srtChannel?.nome ?? "selecionado"} não apresenta um stream de vídeo válido.`);
+      notifyIncident(key, "video", "Falha de Vídeo SRT/UDP", `O programa ${srtChannel?.nome ?? "selecionado"} não apresenta um stream de vídeo válido.`);
     } else if (!failed) {
       clearIncident(key);
     }
   }, [source?.id, source?.tipo, srtProbe, srtProbeLoading, srtVideoStream?.index, srtChannel?.nome, config.notifyVideoLoss, notifyIncident, clearIncident]);
   useEffect(() => {
-    if (source?.tipo !== "srt" || !srtProbe || srtProbeLoading) return;
+    if (!isBtsTransport || !srtProbe || srtProbeLoading) return;
     const key = `audio:${source.id}`;
     const failed = !srtProbe.ok || !srtAudioStream || (srtAudioStream.canais ?? 0) < 1;
     if (failed && config.notifyAudioLoss) {
-      notifyIncident(key, "audio", "Falha de Áudio SRT", `O programa ${srtChannel?.nome ?? "selecionado"} não apresenta canais de áudio.`);
+      notifyIncident(key, "audio", "Falha de Áudio SRT/UDP", `O programa ${srtChannel?.nome ?? "selecionado"} não apresenta canais de áudio.`);
     } else if (!failed) {
       clearIncident(key);
     }
   }, [source?.id, source?.tipo, srtProbe, srtProbeLoading, srtAudioStream?.index, srtAudioStream?.canais, srtChannel?.nome, config.notifyAudioLoss, notifyIncident, clearIncident]);
   useEffect(() => {
-    if (source?.tipo !== "srt" || aribDurMs === null || aribLoading) return;
+    if (!isBtsTransport || aribDurMs === null || aribLoading) return;
     const key = `cc:${source.id}`;
     const failed = aribEstado === "erro" || !aribTemCC;
     if (failed && config.notifyCCLoss) {
@@ -1761,7 +1764,7 @@ export default function MonitorAoVivo() {
     }
   }, [source?.id, source?.tipo, source?.nome, aribDurMs, aribLoading, aribEstado, aribTemCC, aribErro, config.notifyCCLoss, notifyIncident, clearIncident]);
   useEffect(() => {
-    if (!loudnessEnabled || source?.tipo !== "srt" || loudnessDb === null) return;
+    if (!loudnessEnabled || !isBtsTransport || loudnessDb === null) return;
     const key = `loudness:${source.id}`;
     const failed = loudnessDb < -25 || loudnessDb > -21;
     if (failed && config.notifyLoudnessLoss) {
@@ -1807,7 +1810,7 @@ export default function MonitorAoVivo() {
     }
     // For SDI sources: signal = audio (embedded SDI always carries audio)
     if (signalActive && source?.tipo === "sdi") setAudioActive(true);
-    if (signalActive && source?.tipo === "srt") {
+    if (signalActive && isBtsTransport) {
       if (!srtProbe?.ok) {
         setAudioActive(false);
       } else {
@@ -1871,13 +1874,13 @@ export default function MonitorAoVivo() {
   const srtProgramSelectValue = selectedSrtProgramId !== undefined
     ? String(selectedSrtProgramId)
     : srtChannel?.programaId !== undefined ? String(srtChannel.programaId) : "auto";
-  const srtHeaderDetails = source?.tipo === "srt" && srtProbe?.ok
+  const srtHeaderDetails = isBtsTransport && srtProbe?.ok
     ? [srtChannel?.nome, srtChannel?.provedor, srtChannel && `Prog. ${srtChannel.programaNumero ?? srtChannel.programaId ?? "—"}`].filter(Boolean).join(" · ")
     : `${source?.nome} · ${config.codec}`;
-  const videoOverlayDetails = source?.tipo === "srt" && srtVideoStream
+  const videoOverlayDetails = isBtsTransport && srtVideoStream
     ? `${srtVideoStream.resolucao ?? "vídeo"} · ${srtVideoStream.fps ?? "—"} fps · ${srtVideoStream.codec}`
     : `${source?.sdi?.videoFormat ?? srcResolution(source)} · ${fps} fps`;
-  const loudnessStatus: AuditStatus = !loudnessEnabled ? "aguardando" : source?.tipo !== "srt"
+  const loudnessStatus: AuditStatus = !loudnessEnabled ? "aguardando" : !isBtsTransport
     ? "atencao"
     : loudnessDb === null
       ? "aguardando"
@@ -1899,28 +1902,28 @@ export default function MonitorAoVivo() {
     {
       id: "video",
       label: "Vídeo",
-      status: !signalActive ? "erro" : source?.tipo === "srt"
+      status: !signalActive ? "erro" : isBtsTransport
         ? srtProbeLoading ? "aguardando" : srtVideoStream ? "ok" : "erro"
         : "ok",
       detalhe: !signalActive ? "Sinal de vídeo inativo."
-        : source?.tipo === "srt" ? srtProbeLoading ? "Aguardando a leitura do programa." : srtVideoStream ? `${srtVideoStream.resolucao ?? "Resolução não informada"} · ${srtVideoStream.codec}` : "Nenhum stream de vídeo no programa selecionado."
+        : isBtsTransport ? srtProbeLoading ? "Aguardando a leitura do programa." : srtVideoStream ? `${srtVideoStream.resolucao ?? "Resolução não informada"} · ${srtVideoStream.codec}` : "Nenhum stream de vídeo no programa selecionado."
         : `${source?.sdi?.videoFormat ?? srcResolution(source)} · ${fps} fps`,
     },
     {
       id: "audio",
       label: "Áudio",
-      status: source?.tipo === "srt"
+      status: isBtsTransport
         ? srtProbeLoading ? "aguardando" : srtAudioStream && (srtAudioStream.canais ?? 0) > 0 ? "ok" : "erro"
         : audioActive ? "ok" : "erro",
-      detalhe: source?.tipo === "srt"
+      detalhe: isBtsTransport
         ? srtProbeLoading ? "Aguardando o áudio do programa selecionado." : srtAudioStream && (srtAudioStream.canais ?? 0) > 0 ? `${srtAudioStream.canais} canal(is) · ${srtAudioStream.codec}` : "Falta de áudio no programa selecionado."
         : audioActive ? `${configuredChannels} canal(is) configurado(s).` : "Áudio não está ativo.",
     },
     {
       id: "closed_caption",
       label: "Closed Caption",
-      status: source?.tipo !== "srt" ? (ccActive ? "atencao" : "erro") : ccDecoded ? "ok" : ccMapping.length ? "atencao" : aribLoading || aribDurMs === null ? "aguardando" : "erro",
-      detalhe: source?.tipo !== "srt"
+      status: !isBtsTransport ? (ccActive ? "atencao" : "erro") : ccDecoded ? "ok" : ccMapping.length ? "atencao" : aribLoading || aribDurMs === null ? "aguardando" : "erro",
+      detalhe: !isBtsTransport
         ? ccActive ? "CC habilitado no painel; captura ARIB depende de transporte MPEG-TS." : "Closed Caption desativado."
         : ccDecoded ? `CC decodificado · ${captionHistory.current.length} atualização(ões) · ${ccMapping.map(s=>`PID ${s.id} · ${s.codec}`).join(', ')||'ARIB B24'}` : ccMapping.length ? `CC mapeado: ${ccMapping.map(s=>`PID ${s.id} · ${s.codec}`).join(', ')} · sem texto decodificado no período.` : aribLoading || aribDurMs === null ? "Aguardando identificação ou decodificação do CC." : aribEstado === "erro" ? aribErro ?? "Falha na captura ARIB." : "Falta de Closed Caption no período analisado.",
     },
@@ -1928,7 +1931,7 @@ export default function MonitorAoVivo() {
       id: "loudness",
       label: "Loudness",
       status: loudnessStatus,
-      detalhe: source?.tipo !== "srt" ? "Medição física disponível no player SRT; SDI/UDP requer entrada de áudio analisável." : loudnessDb === null ? "Aguardando medição do áudio real." : `${loudnessDb.toFixed(1)} LUFS aprox. · alvo -23 LUFS ±2`,
+      detalhe: !isBtsTransport ? "Medição física disponível nas entradas SRT e UDP." : loudnessDb === null ? "Aguardando medição do áudio real." : `${loudnessDb.toFixed(1)} LUFS aprox. · alvo -23 LUFS ±2`,
     },
   ];
   const selectedProgramName = srtChannel?.nome
@@ -2241,7 +2244,7 @@ export default function MonitorAoVivo() {
             <div className="flex items-center justify-between">
               {/* SRT/UDP: manual activate button */}
               {signalActive && !audioActive && !srtProbeLoading && source?.tipo !== "sdi"
-                && !(source?.tipo === "srt" && srtProbe?.ok) && (
+                && !(isBtsTransport && srtProbe?.ok) && (
                 <button
                   onClick={() => setAudioActive(true)}
                   className="text-[10px] text-green-500 hover:text-green-300 border border-green-800 hover:border-green-600 px-2 py-0.5 rounded transition-colors flex items-center gap-1"
@@ -2286,12 +2289,12 @@ export default function MonitorAoVivo() {
               <span>−60</span><span>−23 ref.</span><span>0 clip</span>
             </div>
             <p className="text-[10px] leading-relaxed text-gray-600">
-              {!loudnessEnabled ? "Loudness desativado; áudio e vídeo continuam ativos." : source?.tipo === "srt" ? "Análise em tempo real do áudio recebido no player SRT." : "Sem entrada de áudio digital para medição física nesta fonte."}
+              {!loudnessEnabled ? "Loudness desativado; áudio e vídeo continuam ativos." : isBtsTransport ? "Análise em tempo real do áudio recebido no player SRT/UDP." : "Sem entrada de áudio digital para medição física nesta fonte."}
             </p>
           </div>
 
           {/* Services received in SRT or UDP transport */}
-          {(source?.tipo === "srt" || source?.tipo === "udp") && (
+          {(isBtsTransport || source?.tipo === "udp") && (
             <div className="bg-[#0f1117] border border-blue-900/60 rounded-lg p-3 flex flex-col gap-2" data-testid="panel-srt-channel">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
@@ -2510,7 +2513,7 @@ export default function MonitorAoVivo() {
           <div className="bg-[#0f1117] border border-[#1e2332] rounded-lg p-3 flex flex-col gap-2" data-testid="panel-status">
             <span className="text-xs font-semibold text-gray-400 mb-0.5">Status do Sistema</span>
             <StatusRow label="Sinal de Vídeo" value={signalActive?"Ativo":"Inativo"} active={signalActive} onClick={()=>setSignalActive(v=>!v)} testId="btn-signal"/>
-            <StatusRow label="Áudio" value={source?.tipo === "srt" && srtProbe?.ok && !srtAudioStream ? "Sem áudio" : audioActive ? "Recebendo" : "Silêncio"} active={audioActive} onClick={()=>{ if (!signalActive || (source?.tipo === "srt" && srtProbe?.ok)) return; setAudioActive(v=>{ if (!v) { setAudioLevels(Array(16).fill(-60)); setPeakLevels(Array(16).fill(-60)); } return !v; }); }} testId="btn-audio"/>
+            <StatusRow label="Áudio" value={isBtsTransport && srtProbe?.ok && !srtAudioStream ? "Sem áudio" : audioActive ? "Recebendo" : "Silêncio"} active={audioActive} onClick={()=>{ if (!signalActive || (isBtsTransport && srtProbe?.ok)) return; setAudioActive(v=>{ if (!v) { setAudioLevels(Array(16).fill(-60)); setPeakLevels(Array(16).fill(-60)); } return !v; }); }} testId="btn-audio"/>
             <StatusRow label="Gravação" value={recording?"REC":"Parado"} active={recording} onClick={handleRecord} testId="btn-rec"/>
             <div className="flex items-center justify-between py-0.5">
               <span className="text-xs text-gray-500">Closed Caption</span>
@@ -2553,9 +2556,9 @@ export default function MonitorAoVivo() {
               {source.tipo==="udp"&&source.udp&&<><p className="text-[10px] text-gray-500 font-mono">{source.udp.address}:{source.udp.port}</p><p className="text-[10px] text-gray-600">{source.udp.protocol.toUpperCase()} · iface {source.udp.interface}</p><p className="text-[10px] text-gray-600">Buffer {(source.udp.bufferSize/1000).toFixed(0)} KB</p></>}
               <div className="flex items-center gap-3 mt-1">
                 <button onClick={()=>setEntradasOpen(true)} className="text-[10px] text-teal-500 hover:text-teal-300 text-left transition-colors" data-testid="btn-edit-src">Editar entrada →</button>
-                {source.tipo==="srt" && (
+                {(source.tipo==="srt"||source.tipo==="udp") && (
                   <button onClick={()=>setSrtTestOpen(true)} className="text-[10px] text-blue-400 hover:text-blue-200 transition-colors flex items-center gap-1" data-testid="btn-srt-test">
-                    <Signal className="h-3 w-3"/>Testar SRT →
+                    <Signal className="h-3 w-3"/>Testar {source.tipo.toUpperCase()} →
                   </button>
                 )}
               </div>
@@ -2568,7 +2571,7 @@ export default function MonitorAoVivo() {
       <MultichannelRecordings open={multichannelOpen} onOpenChange={setMultichannelOpen} inputSource={recordingInput}/>
       <EntradasDialog open={entradasOpen} onOpenChange={setEntradasOpen} sources={sources} onSave={s=>{ saveSources(s); setSourceIdx(0); }}/>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onChange={next=>{ setConfig(next); localStorage.setItem("dccp-recording-path", next.outputPath); localStorage.setItem("dccp-notification-settings", JSON.stringify(next)); void fetch('/api/operations/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({videoAlert:next.notifyVideoLoss,audioAlert:next.notifyAudioLoss,ccAlert:next.notifyCCLoss,...(next.telegramToken&&next.telegramChatId?{token:next.telegramToken,chatId:next.telegramChatId}:{})})}).catch(()=>{}); }} sourceName={source?.nome??SISTEMA} onRecordings={()=>setMultichannelOpen(true)}/>
-      <SrtTestDialog open={srtTestOpen} onOpenChange={setSrtTestOpen} source={source?.tipo==="srt"?source:null}/>
+      <SrtTestDialog open={srtTestOpen} onOpenChange={setSrtTestOpen} source={isBtsTransport?source:null}/>
       <BtsReportDialog
         open={btsReportOpen}
         onOpenChange={setBtsReportOpen}
