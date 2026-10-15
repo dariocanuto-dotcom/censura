@@ -495,7 +495,7 @@ function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serv
       {!recording&&<p className="text-[11px] text-gray-500">Gravação parada. Consulte os arquivos em Gravar → Busca e exportação.</p>}
       <RecordingProgress channels={channels} serverTime={serverTime} compact/>
       <SampleRecordingStatus/>
-      <p className="text-[10px] text-gray-400">Dados da gravação contínua: {(channels[0] as any)?.metadataError??((channels[0] as any)?.metadataRunning?'salvando tabelas, EPG e CC originais':recording?'verifique o modo e a entrada em Gravar':'aguardando ativação da gravação')}</p>
+      <p className="text-[10px] text-gray-400">Dados da gravação contínua: {(channels[0] as any)?.metadataError??((channels[0] as any)?.metadataRunning?'salvando tabelas, EPG e CC em texto (.txt)':recording?'verifique o modo e a entrada em Gravar':'aguardando ativação da gravação')}</p>
     </div>
   );
 }

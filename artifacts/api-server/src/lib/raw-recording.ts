@@ -1,3 +1,4 @@
+import {TransportText} from './transport-text.ts';
 import { recordingFileName, finalizeRecording } from './recording-file.ts';
 import { createWriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
@@ -11,12 +12,13 @@ export function packetSize(buffer:Buffer) {
   }
   return null;
 }
-export async function captureTransport(input:Readable,root:string|((date:Date)=>string),minutes:number,onActive:(block:{name:string;start:string;end:string;bytes:number}|undefined)=>void,onComplete:(file:{path:string;start:string;end:string;bytes:number})=>Promise<void>,prefix='',now=Date.now) {
-  let pending=Buffer.alloc(0),size:number|null=null;
+export async function captureTransport(input:Readable,root:string|((date:Date)=>string),minutes:number,onActive:(block:{name:string;start:string;end:string;bytes:number}|undefined)=>void,onComplete:(file:{path:string;start:string;end:string;bytes:number})=>Promise<void>,prefix='',now=Date.now,format:'ts'|'txt'='ts') {
+  let pending=Buffer.alloc(0),size:number|null=null,report:TransportText|undefined;
   let output:ReturnType<typeof createWriteStream>|undefined;
   let filePath='',finalPath='',start=0,end=0,bytes=0;
   const close=async()=>{
     if(!output)return;
+    if(report){const text=Buffer.from(report.finish(now()));if(!output.write(text))await once(output,'drain');bytes+=text.length;}
     const finished=once(output,'finish');output.end();await finished;
     finalPath=await finalizeRecording(filePath,finalPath);
     await onComplete({path:finalPath,start:new Date(start).toISOString(),end:new Date(now()).toISOString(),bytes});
@@ -28,9 +30,10 @@ export async function captureTransport(input:Readable,root:string|((date:Date)=>
     const p=(key:string)=>parts.find(x=>x.type===key)!.value;
     const day=p('day')+p('month')+p('year');
     const folder=join(typeof root==='function'?root(new Date(start)):root,`${prefix}${day}`);await mkdir(folder,{recursive:true});
-    const name=recordingFileName(new Date(start),'ts');
+    const name=recordingFileName(new Date(start),format);
     finalPath=join(folder,name);filePath=finalPath+`_${randomUUID().slice(0,8)}.partial`;output=createWriteStream(filePath,{flags:'wx'});
     output.on('error',()=>{});
+    report=format==='txt'?new TransportText():undefined;if(report){const text=Buffer.from(report.header(start));output.write(text);bytes+=text.length;}
   };
   try {
     for await(const chunk of input){
@@ -38,10 +41,10 @@ export async function captureTransport(input:Readable,root:string|((date:Date)=>
       if(!size){size=packetSize(pending);if(!size){if(pending.length>65536)throw new Error('Não foi identificado transporte TS/BTS de 188, 192 ou 204 bytes.');continue;}}
       const length=Math.floor(pending.length/size)*size;if(!length)continue;
       if(output&&now()>=end)await close();if(!output)await open();
-      const data=pending.subarray(0,length);pending=Buffer.from(pending.subarray(length));
+      const raw=pending.subarray(0,length);const data=report?Buffer.from(report.push(raw,size,now())):raw;pending=Buffer.from(pending.subarray(length));
       if(!output!.write(data))await once(output!,'drain');bytes+=data.length;
       onActive({name:finalPath.split(/[\\/]/).at(-1)!,start:new Date(start).toISOString(),end:new Date(end).toISOString(),bytes});
     }
-    if(pending.length&&output){if(!output.write(pending))await once(output,'drain');bytes+=pending.length;}
+    if(pending.length&&output&&!report){if(!output.write(pending))await once(output,'drain');bytes+=pending.length;}
   } finally {await close();}
 }

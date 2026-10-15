@@ -136,7 +136,7 @@ export function recordingArgs(config: ChannelConfig, root: string, csv: string, 
 function ensureMetadata(item:Running){
  if(item.stopping||item.config.codec==='copy'||! /^(srt|udp|rtp):/.test(item.config.url)||item.metadata?.active||Date.now()<(item.metadataRetryAt??0))return;
  const url=new URL(item.config.url);if(url.protocol==='srt:')url.searchParams.set('latency',String(Math.max(Number(url.searchParams.get('latency'))||0,1000000)));if(url.protocol==='udp:')url.searchParams.set('reuse','1');
- item.metadata=metadataRecording(url.toString(),date=>recordingRoot(item.config,date),item.config.blockMinutes??10,`${channelSlug(item.config.name)}_dados_`,async file=>{state.files.push({...file,id:randomUUID(),channelId:item.config.id,channel:item.config.name+' · Dados originais',programId:item.config.programId,codec:'dados',format:'ts'});await save();});
+ item.metadata=metadataRecording(url.toString(),date=>recordingRoot(item.config,date),item.config.blockMinutes??10,`${channelSlug(item.config.name)}_dados_`,async file=>{state.files.push({...file,id:randomUUID(),channelId:item.config.id,channel:item.config.name+' · Dados originais',programId:item.config.programId,codec:'dados',format:'txt'});await save();});
  void item.metadata.done.then(()=>{item.metadataRetryAt=Date.now()+5000;});
 }
 async function start(config: ChannelConfig) {
