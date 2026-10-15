@@ -9,7 +9,7 @@ export function btsSamplePath(directory:string,date:Date){
  const parts=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(date);
  const p=(key:string)=>parts.find(part=>part.type===key)!.value;
  const day=p('day')+p('month')+p('year');
- return join(directory,p('year'),p('month'),day,`freme${day}-${p('hour')}h${p('minute')}s${p('second')}.bts`);
+ return join(directory,p('year'),p('month'),day,`freme${day}-${p('hour')}h${p('minute')}s${p('second')}.ts`);
 }
 export async function captureBtsWindows(input:Readable,directory:string,onComplete:(sample:BtsSample)=>Promise<void>,onReceived:()=>void=()=>{},onActive:(path:string|null)=>void=()=>{},now=Date.now){
  let pending=Buffer.alloc(0),size:number|null=null,nextStart:number|undefined;
@@ -22,7 +22,7 @@ export async function captureBtsWindows(input:Readable,directory:string,onComple
   // An interrupted window stays visibly partial; never advertise it as a full five seconds.
   if(now()<sample.end||sample.bytes===0||sample.lastData<sample.end-1500)return;
   const path=await finalizeRecording(sample.temporary,sample.destination);
-  await onComplete({path,start:new Date(sample.start).toISOString(),end:new Date(sample.end).toISOString(),bytes:sample.bytes,packetSize:size!});
+  await onComplete({path,start:new Date(sample.start).toISOString(),end:new Date(sample.end).toISOString(),bytes:sample.bytes,packetSize:188});
  };
  try{
   for await(const value of input){
@@ -31,7 +31,8 @@ export async function captureBtsWindows(input:Readable,directory:string,onComple
     pending=Buffer.concat([pending,chunk]);
     if(!size){size=packetSize(pending);if(!size){if(pending.length>65536)throw new Error('Não foi identificado BTS/TS original de 188, 192 ou 204 bytes.');return;}}
     const length=Math.floor(pending.length/size)*size;if(!length)return;
-    const data=pending.subarray(0,length);pending=Buffer.from(pending.subarray(length));
+    const original=pending.subarray(0,length);pending=Buffer.from(pending.subarray(length));
+    const data=size===188?original:Buffer.concat(Array.from({length:length/size},(_,index)=>original.subarray(index*size!+(size===192?4:0),index*size!+(size===192?4:0)+188)));
     const time=now();nextStart??=Math.ceil(time/30000)*30000;
     if(active&&time>=active.end)await close();
     if(!active&&time>=nextStart){
