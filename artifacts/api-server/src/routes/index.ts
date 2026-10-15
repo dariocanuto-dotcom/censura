@@ -1,3 +1,4 @@
+import btsSamplesRouter from './bts-samples';
 import operationsRouter from './operations';
 import { systemMetrics } from '../lib/system-monitor';
 import recordingsRouter from "./recordings";
@@ -17,6 +18,7 @@ import aribRouter from "./arib";
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use('/bts-samples',btsSamplesRouter);
 router.use('/operations',operationsRouter);
 router.get('/system/metrics',async(_req,res)=>{try{res.setHeader('Cache-Control','no-store');res.json(await systemMetrics());}catch{res.status(503).json({error:'Monitoramento indisponível.'});}});
 router.use("/recordings", recordingsRouter);

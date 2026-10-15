@@ -1,3 +1,4 @@
+import { BtsSamples } from './bts-samples';
 import { RecordingExport } from './recording-export';
 import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -57,6 +58,7 @@ export function MultichannelRecordings({open,onOpenChange,inputSource}:{open:boo
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-6xl max-h-[92vh] overflow-auto bg-[#0f1117] text-gray-200 border-[#2a3050]"><DialogHeader><DialogTitle>Gravação contínua · um canal</DialogTitle></DialogHeader>
     <p className="text-xs text-gray-400">Gravação em blocos de 1, 2, 5 ou 10 minutos, pastas por canal e dia, agendamento e exportação. O serviço continua na API quando esta janela é fechada.</p>
     {error&&<p className="text-red-400 text-sm">{error}</p>}
+    <BtsSamples/>
     {channels&&<div className="grid gap-3">{['1'].map(id=><ChannelForm key={id} id={id} initial={channels.find(c=>c.id===id)} onSaved={()=>void reload()} inputSource={inputSource}/>)}</div>}
     <RecordingProgress channels={channels??[]} serverTime={serverTime}/>
     {exportFile&&<RecordingExport key={exportFile} fileId={exportFile} selectedProgram={inputSource.programId}/>}<h3 className="text-teal-300 font-semibold">Busca e exportação</h3><p className="text-xs text-gray-400">{found.length} blocos encontrados · tabela com os 200 mais recentes · exportação até 500 blocos / 3,5 GB por ZIP.</p>

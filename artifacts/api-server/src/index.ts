@@ -1,3 +1,4 @@
+import { initBtsSamples, stopBtsSamples } from './lib/bts-samples';
 import { initOperations, stopOperations } from './lib/operations';
 import { shutdownConversions } from './lib/conversions';
 import { initRecordings, shutdownRecordings } from "./lib/recordings";
@@ -28,6 +29,7 @@ app.listen(port, process.env.HOST??'0.0.0.0', (err?: Error) => {
 });
 
 
+void initBtsSamples().catch(error=>logger.error({err:error},'BTS sampler initialization failed'));
 void initOperations().catch(error => logger.error({err:error},'Operational monitoring initialization failed'));
 void initRecordings().catch(error => logger.error({ err: error }, "Recording service initialization failed"));
-for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { void Promise.all([stopOperations(),shutdownRecordings(),shutdownConversions()]).finally(() => process.exit(0)); });
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { void Promise.all([stopBtsSamples(),stopOperations(),shutdownRecordings(),shutdownConversions()]).finally(() => process.exit(0)); });
