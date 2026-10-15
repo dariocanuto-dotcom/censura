@@ -1650,7 +1650,7 @@ export default function MonitorAoVivo() {
     send();const timer=setInterval(send,1000);return()=>clearInterval(timer);
   },[aribLinhas,hasDecodedArib,ccActive,ccShowOverlay,signalActive,recordingService.channels[0]?.captureMode,recordingService.channels[0]?.enabled]);
   useEffect(()=>{
-    if(!source || !['srt','rtsp','ndi'].includes(source.tipo)||!signalActive)return;
+    if(!source || !['srt','udp','rtsp','ndi'].includes(source.tipo)||!signalActive)return;
     let cancelled=false;let timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
     const pollAudio=async()=>{
       const sessionId=srtSessionId.current;
