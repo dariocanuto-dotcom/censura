@@ -6,7 +6,7 @@ type PanelSize = { span: number; height?: number; column?: number; row?: number 
 type Saved = { order: string[]; sizes: Record<string, PanelSize>; locked: boolean; showBts: boolean; hidden:string[] };
 const KEY = "dccp-monitor-layout-v1";
 const DEFAULT: Saved = { order: [], sizes: {}, locked: true, showBts: false, hidden:[] };
-const names: Record<string, string> = { "panel-preview": "Preview", "panel-vu": "Áudio", "panel-loudness": "Loudness", "panel-arib": "Closed Caption", "panel-epg": "EPG", "panel-srt-channel": "Canal SRT", "panel-status": "Estado", "panel-metrics": "Sinal", "panel-bts-quick": "Relatórios BTS", "panel-source-info": "Entrada", "panel-tables": "Tabelas BTS", "RecordingBlocks": "Gravação", "alerts": "Alertas" };
+const names: Record<string, string> = { "panel-preview": "Preview", "panel-vu": "Áudio", "panel-loudness": "Loudness", "panel-arib": "Closed Caption", "panel-epg": "EPG", "panel-srt-channel": "Serviços SRT / UDP", "panel-status": "Estado", "panel-metrics": "Sinal", "panel-bts-quick": "Relatórios BTS", "panel-source-info": "Entrada", "panel-tables": "Tabelas BTS", "RecordingBlocks": "Gravação", "alerts": "Alertas" };
 export function MonitorWorkspace({ children }: { children: ReactNode }) {
   const [layout, setLayout] = useState<Saved>(() => { try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return DEFAULT; } });
   const [toolbarHost,setToolbarHost]=useState<HTMLElement|null>(null);

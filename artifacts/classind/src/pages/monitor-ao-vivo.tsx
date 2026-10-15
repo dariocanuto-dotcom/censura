@@ -1453,7 +1453,7 @@ export default function MonitorAoVivo() {
                 return captionStream ? { captionStreamIndex: captionStream.index } : {};
               })()
             : {}),
-          ...(source?.tipo === "srt" && source.id && (srtProgramBySource[source.id] ?? srtProbe?.canal?.programaId) !== undefined
+          ...((source?.tipo === "srt" || source?.tipo === "udp") && source.id && (srtProgramBySource[source.id] ?? srtProbe?.canal?.programaId) !== undefined
             ? { programId: srtProgramBySource[source.id] ?? srtProbe?.canal?.programaId }
             : {}),
         }),
@@ -2290,12 +2290,12 @@ export default function MonitorAoVivo() {
             </p>
           </div>
 
-          {/* Live SRT channel metadata */}
-          {source?.tipo === "srt" && (
+          {/* Services received in SRT or UDP transport */}
+          {(source?.tipo === "srt" || source?.tipo === "udp") && (
             <div className="bg-[#0f1117] border border-blue-900/60 rounded-lg p-3 flex flex-col gap-2" data-testid="panel-srt-channel">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
-                  <Wifi className="h-3 w-3 text-blue-400"/>Canal recebido no SRT
+                  <Wifi className="h-3 w-3 text-blue-400"/>Serviços recebidos no {source.tipo.toUpperCase()}
                 </span>
                 <span className={`text-[10px] font-mono ${srtVideoState === "playing" ? "text-teal-400" : "text-blue-400"}`}>
                   {srtVideoState === "playing" ? "VÍDEO AO VIVO" : srtProbeLoading ? "LENDO DADOS…" : "AGUARDANDO"}
@@ -2330,7 +2330,7 @@ export default function MonitorAoVivo() {
                     </SC>
                   </Select>
                   <p className="text-[10px] text-gray-600 mt-1">
-                    A troca reinicia a ponte SRT para monitorar o PID de vídeo deste programa.
+                    A troca reinicia o preview {source.tipo.toUpperCase()} para monitorar o vídeo e o áudio deste serviço.
                   </p>
                 </div>
               )}
