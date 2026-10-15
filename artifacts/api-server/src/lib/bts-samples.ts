@@ -1,3 +1,4 @@
+import {saveHdSnapshot} from './hd-snapshot.ts';
 import {samplePair} from './sample-pair.ts';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {mkdir,readFile,writeFile,rename,open,unlink,statfs} from 'node:fs/promises';
@@ -7,6 +8,7 @@ import {initRecordings,status} from './recordings.ts';
 import {captureBtsWindows,type BtsSample} from './bts-window.ts';
 const root=resolve('.runtime/recording-service/bts-samples');
 let config={enabled:false,directory:''};
+let lastPhoto:Awaited<ReturnType<typeof saveHdSnapshot>>|null=null,photoError:string|null=null;
 let lastSample:BtsSample|null=null,completed=0,error:string|null=null,retryAt=0,currentSample:string|null=null;
 let run:{process:ChildProcess;done:Promise<void>;signature:string;stopping:boolean;receivedAt:number}|undefined;
 let initialization:Promise<void>|undefined,timer:ReturnType<typeof setInterval>|undefined,busy=false,shutdown=false;
@@ -16,8 +18,8 @@ export function separateSampleFolder(directory:string,recordingDirectory?:string
  if(recordingDirectory){const a=resolve(directory),b=resolve(recordingDirectory),inside=(parent:string,child:string)=>{const path=relative(parent,child);return !path||(!path.startsWith('..'+sep)&&path!=='..'&&!isAbsolute(path));};if(inside(a,b)||inside(b,a))throw new Error('Escolha uma pasta separada da gravação contínua, por exemplo uma pasta ao lado dela.');}
  return resolve(directory);
 }
-function save(){saving=saving.catch(()=>{}).then(async()=>{await mkdir(root,{recursive:true});await writeFile(join(root,'state.json.tmp'),JSON.stringify({config,lastSample,completed}),{mode:0o600});await rename(join(root,'state.json.tmp'),join(root,'state.json'));});return saving;}
-export function btsSamplesStatus(){const channel=status().channels[0];return {config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5,mode:"video-and-data",videoKbps:200,audioKbps:64,format:"mpegts"};}
+function save(){saving=saving.catch(()=>{}).then(async()=>{await mkdir(root,{recursive:true});await writeFile(join(root,'state.json.tmp'),JSON.stringify({config,lastSample,lastPhoto,completed}),{mode:0o600});await rename(join(root,'state.json.tmp'),join(root,'state.json'));});return saving;}
+export function btsSamplesStatus(){const channel=status().channels[0];return {photoDirectory:channel?resolve(dirname(channel.directory),'dados_transmissao'):null,lastPhoto,photoError,photoIntervalSeconds:30,config,source:channel?.name??null,sourceSupported:Boolean(channel&&/^(srt|udp|rtp):/.test(channel.url)),running:Boolean(run),capturing:Boolean(currentSample),currentSample,lastSample,completed,error,intervalSeconds:30,durationSeconds:5,mode:"video-and-data",videoKbps:200,audioKbps:64,format:"mpegts"};}
 async function stop(){const worker=run;if(!worker)return;worker.stopping=true;worker.process.stdin?.write('q\n');const force=setTimeout(()=>worker.process.kill('SIGKILL'),2500);try{await worker.done;}finally{clearTimeout(force);if(run===worker)run=undefined;currentSample=null;}}
 async function tick(){
  if(busy||shutdown)return;busy=true;
@@ -35,13 +37,13 @@ async function tick(){
   const process=spawn('ffmpeg',['-hide_banner','-loglevel','warning','-rw_timeout','8000000','-f','data','-i',url.toString(),'-map','0:0','-c','copy','-f','data','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
   let stderr='';process.stdin?.on('error',()=>{});process.stderr?.on('data',value=>{stderr=(stderr+value.toString()).slice(-1000);});process.on('error',()=>{error='Não foi possível iniciar o receptor de amostras BTS.';});
   const worker={process,signature,stopping:false,receivedAt:Date.now(),done:Promise.resolve()};run=worker;
-  worker.done=captureBtsWindows(process.stdout!,config.directory,async sample=>{lastSample=await samplePair(sample,channel.programId);completed++;error=null;await save();},()=>{worker.receivedAt=Date.now();},path=>{currentSample=path;})
+  worker.done=captureBtsWindows(process.stdout!,config.directory,async sample=>{let photo:Awaited<ReturnType<typeof saveHdSnapshot>>|null=null;try{photo=await saveHdSnapshot(sample.path,channel.programId,resolve(dirname(channel.directory),'dados_transmissao'),new Date(sample.start));lastPhoto=photo;photoError=null;}catch(e){photoError=e instanceof Error?e.message:'Falha na foto HD.';}const pair=await samplePair(sample,channel.programId);lastSample={...pair,totalBytes:pair.totalBytes+(photo?.bytes??0)} as typeof pair;completed++;error=null;await save();},()=>{worker.receivedAt=Date.now();},path=>{currentSample=path;})
    .catch(e=>{if(!worker.stopping)error=e instanceof Error?e.message:'Falha ao salvar BTS.';process.kill('SIGTERM');})
    .finally(async()=>{if(!worker.stopping){error??=stderr?'A entrada BTS foi interrompida; tentando reconectar.':'O receptor BTS encerrou; tentando reconectar.';retryAt=Date.now()+5000;}if(run===worker)run=undefined;currentSample=null;await save();}).catch(e=>{error=e instanceof Error?e.message:'Falha ao persistir o estado BTS.';});
  }catch(e){await stop();error=e instanceof Error?e.message:'Falha nas amostras BTS.';retryAt=Date.now()+5000;}finally{busy=false;}
 }
 export function initBtsSamples(){return initialization??=initialize().catch(e=>{initialization=undefined;throw e;});}
-async function initialize(){await initRecordings();try{const saved=JSON.parse(await readFile(join(root,'state.json'),'utf8'));config=saved.config;lastSample=saved.lastSample;completed=saved.completed??0;}catch(e:any){if(e.code!=='ENOENT')throw e;}
+async function initialize(){await initRecordings();try{const saved=JSON.parse(await readFile(join(root,'state.json'),'utf8'));config=saved.config;lastSample=saved.lastSample;lastPhoto=saved.lastPhoto??null;completed=saved.completed??0;}catch(e:any){if(e.code!=='ENOENT')throw e;}
  if(!config.directory){const directory=status().channels[0]?.directory;config.directory=directory?resolve(dirname(directory),'amostras_bts'):resolve('.runtime/amostras_bts');}
  await save();timer=setInterval(()=>void tick().catch(e=>{error=e instanceof Error?e.message:'Falha no serviço BTS.';}),1000);timer.unref();}
 export function configureBtsSamples(input:{enabled:boolean;directory:string}){
