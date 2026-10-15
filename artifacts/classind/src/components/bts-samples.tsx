@@ -10,7 +10,7 @@ export function BtsSamples(){
   <label className="block">Pasta das amostras MPEG-TS<input className="w-full mt-1 bg-[#1a1f2e] border border-[#2a3050] rounded p-2" value={directory} onChange={e=>setDirectory(e.target.value)}/></label>
   <p className="font-mono text-[11px] text-gray-500 break-all">2026/10/15102026/freme15102026-11h24s30_video.ts + freme15102026-11h24s30_dados.ts</p>
   <p className="text-gray-500">Janelas nos segundos 00 e 30, no horário de Brasília. Os arquivos são mantidos; a captura é suspensa se restarem 10% ou menos no HD. Cortes incompletos ficam com extensão .partial.</p>
-  <p className="text-teal-300">Foto HD JPEG 1920 × 1080, até 200 KB, a cada 30 segundos, extraída do vídeo original.</p>
+  <p className="text-teal-300">Foto HD JPEG 1920 × 1080, até 200 KB, a cada 60 segundos, extraída do vídeo original.</p>
   {data?.photoDirectory&&<p className="text-gray-400 break-all">Fotos: {data.photoDirectory}/ano/mês/dia/</p>}
   {data?.lastPhoto&&<p className="text-gray-400 break-all">Última foto: {data.lastPhoto.path} · {(data.lastPhoto.bytes/1000).toFixed(0)} KB</p>}
   {data?.photoError&&<p className="text-amber-300">Foto HD: {data.photoError}</p>}
