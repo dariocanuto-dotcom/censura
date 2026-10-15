@@ -1,3 +1,4 @@
+import {udpInputUrl} from '@/lib/udp-input';
 import {SampleRecordingStatus} from '@/components/bts-samples';
 import { OperationalReports } from '@/components/operational-reports';
 import { SystemStatusBar } from '@/components/system-status-bar';
@@ -1408,11 +1409,11 @@ export default function MonitorAoVivo() {
       return `srt://${source.srt.host}:${source.srt.port}?${p.toString()}`;
     }
     if (source.tipo === "udp" && source.udp) {
-      return `${source.udp.protocol ?? "udp"}://${source.udp.address}:${source.udp.port}`;
+      return udpInputUrl(source.udp);
     }
     return null;
   }, [source]);
-  const recordingInput={name:(srtProbe?.ok?srtProbe.canal?.nome:undefined)||source?.nome||'Entrada',url:sourceStreamUrl()??'',programId:source?.tipo==='srt'?srtProgramBySource[source.id]:undefined};
+  const recordingInput={name:(srtProbe?.ok?srtProbe.canal?.nome:undefined)||source?.nome||'Entrada',url:sourceStreamUrl()??'',programId:source&&(source.tipo==='srt'||source.tipo==='udp')?srtProgramBySource[source.id]:undefined};
 
 
   // ── ARIB CC capture ─────────────────────────────────────────────────────────
@@ -1560,7 +1561,7 @@ export default function MonitorAoVivo() {
     setLoudnessPeakDb(null);
     srtSessionId.current = null;
 
-    if (!currentSource || !["srt","rtsp","ndi"].includes(currentSource.tipo) || !signalActive) return;
+    if (!currentSource || !["srt","udp","rtsp","ndi"].includes(currentSource.tipo) || !signalActive) return;
     const currentSrt = currentSource.srt;
     setSrtProbeLoading(true);
 
@@ -1574,7 +1575,7 @@ export default function MonitorAoVivo() {
           body: JSON.stringify({
             ...currentSrt,
             consumerId,
-            ...(currentSource.tipo === "ndi" && (currentSource.network?.native ?? !currentSource.network?.url) ? {ndiSource:currentSource.network?.sourceName ?? ""} : currentSource.tipo !== "srt" ? {url:currentSource.network?.url ?? ""} : {}),
+            ...(currentSource.tipo === "ndi" && (currentSource.network?.native ?? !currentSource.network?.url) ? {ndiSource:currentSource.network?.sourceName ?? ""} : currentSource.tipo === "udp" && currentSource.udp ? {url:udpInputUrl(currentSource.udp)} : currentSource.tipo !== "srt" ? {url:currentSource.network?.url ?? ""} : {}),
             captureMetadata: currentSource.tipo === "srt",
             ...(srtProgramBySource[currentSource.id] !== undefined
               ? { programId: srtProgramBySource[currentSource.id] }
@@ -1630,7 +1631,7 @@ export default function MonitorAoVivo() {
           .catch(() => undefined);
       }
     };
-  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, source?.network?.url, source?.network?.sourceName, source?.network?.native, signalActive, srtBridgeNonce, srtProgramBySource]);
+  }, [source?.id, source?.tipo, source?.srt?.host, source?.srt?.port, source?.srt?.mode, source?.srt?.latencyMs, source?.srt?.passphrase, source?.srt?.streamId, source?.udp?.address, source?.udp?.port, source?.udp?.interface, source?.udp?.protocol, source?.udp?.bufferSize, source?.network?.url, source?.network?.sourceName, source?.network?.native, signalActive, srtBridgeNonce, srtProgramBySource]);
 
   const srtChannel = srtProbe?.canal;
   const srtVideoStream = srtProbe?.streams.find(stream => stream.tipo === "video" && srtChannel?.streams?.includes(stream.index))
@@ -1661,7 +1662,7 @@ export default function MonitorAoVivo() {
 
   // Read captions and EPG from the same live transport as the video.
   useEffect(() => {
-    if (!source || !["srt","rtsp","ndi"].includes(source.tipo) || !signalActive) return;
+    if (!source || !["srt","udp","rtsp","ndi"].includes(source.tipo) || !signalActive) return;
     let cancelled = false;
     let lastCaptionRevision: string | null = null;
     let clearCaptionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1855,12 +1856,12 @@ export default function MonitorAoVivo() {
   };
 
   const configuredChannels = Math.min(parseInt(config.audioChannels)||16, 16);
-  const numCh = source && ["srt","rtsp","ndi"].includes(source.tipo)
+  const numCh = source && ["srt","udp","rtsp","ndi"].includes(source.tipo)
     ? Math.min(Math.max(srtAudioStream?.canais ?? 0, 0), 16)
     : configuredChannels;
   const displayedLevels = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(audioLevels[i]??-60):-60);
   const displayedPeaks = Array.from({length:16},(_,i)=>audioActive&&signalActive&&i<numCh?(peakLevels[i]??-60):-60);
-  const audioFormatLabel = source && ["srt","rtsp","ndi"].includes(source.tipo) && srtAudioStream
+  const audioFormatLabel = source && ["srt","udp","rtsp","ndi"].includes(source.tipo) && srtAudioStream
     ? `${srtAudioStream.codec.toUpperCase()}${srtAudioStream.amostragem ? ` ${Math.round(srtAudioStream.amostragem / 1000)} kHz` : ""}`
     : config.audioFormat.split(" ").slice(0,2).join(" ");
   const hasNotif = !!(config.telegramToken||config.whatsappWebhookUrl||config.telegramServerConfigured);
@@ -2144,7 +2145,7 @@ export default function MonitorAoVivo() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
           {/* Video */}
           <div className={`relative rounded-lg overflow-hidden border-2 transition-colors ${signalActive?(recording?"border-red-500":"border-[#1e4d3a]"):"border-red-700"} bg-black`} style={{ aspectRatio:"16/9", width:"100%" }} data-testid="panel-preview">
-            {source?.tipo === "webrtc" ? <WebRtcInput url={source.network?.url ?? ""} active={signalActive} onAudio={onSrtAudioAnalysis}/> : source && ["srt","rtsp","ndi"].includes(source.tipo) ? (
+            {source?.tipo === "webrtc" ? <WebRtcInput url={source.network?.url ?? ""} active={signalActive} onAudio={onSrtAudioAnalysis}/> : source && ["srt","udp","rtsp","ndi"].includes(source.tipo) ? (
               srtPlaybackUrl ? (
                 <SrtVideo src={srtPlaybackUrl} active={signalActive} onStateChange={onSrtVideoState} onAudioAnalysis={onSrtAudioAnalysis}/>
               ) : (
@@ -2162,7 +2163,7 @@ export default function MonitorAoVivo() {
             {signalActive&&<div className="absolute top-2 right-3 font-mono text-xs text-white bg-black/60 px-2 py-0.5 rounded">{videoOverlayDetails}</div>}
             {recording&&recBlink&&<div className="absolute bottom-10 right-3 flex items-center gap-1.5 bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded"><Circle className="h-2 w-2 fill-white"/>GRAVANDO</div>}
             <div className={`absolute bottom-10 left-3 flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded ${signalActive?"bg-teal-700 text-teal-100":"bg-red-900 text-red-200"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${signalActive?(source && ["srt","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? "bg-blue-300 animate-pulse" : "bg-teal-300"):"bg-red-400 animate-pulse"}`}/>{signalActive?(source && ["srt","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? srtVideoState === "error" ? "FALHA NA ENTRADA" : `CONECTANDO ${source?.tipo.toUpperCase()}` : "SINAL ATIVO"):"SEM SINAL"}
+              <span className={`h-1.5 w-1.5 rounded-full ${signalActive?(source && ["srt","udp","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? "bg-blue-300 animate-pulse" : "bg-teal-300"):"bg-red-400 animate-pulse"}`}/>{signalActive?(source && ["srt","udp","rtsp","ndi"].includes(source.tipo) && srtVideoState !== "playing" ? srtVideoState === "error" ? "FALHA NA ENTRADA" : `CONECTANDO ${source?.tipo.toUpperCase()}` : "SINAL ATIVO"):"SEM SINAL"}
             </div>
             {ccActive&&ccShowOverlay&&signalActive&&(hasDecodedArib || source?.tipo === "sdi")&&(
               <div className="absolute inset-x-0 bottom-0 z-20 flex justify-center pb-2 px-4 pointer-events-none">

@@ -665,8 +665,8 @@ router.post("/stream", async (req, res): Promise<void> => {
   }
 
   if (inputUrl) {
-    try { if (!['rtsp:','rtsps:','srt:'].includes(new URL(inputUrl).protocol)) throw new Error(); }
-    catch { res.status(400).json({ok:false,erro:"Informe uma URL RTSP ou SRT válida do receptor."}); return; }
+    try { if (!['rtsp:','rtsps:','srt:','udp:','rtp:'].includes(new URL(inputUrl).protocol)) throw new Error(); }
+    catch { res.status(400).json({ok:false,erro:"Informe uma URL RTSP, SRT, UDP ou RTP válida do receptor."}); return; }
   }
   if (recordingDirectory) {
     if (!isAbsolute(recordingDirectory)) { res.status(400).json({ ok: false, erro: "Escolha uma pasta absoluta no HD." }); return; }
