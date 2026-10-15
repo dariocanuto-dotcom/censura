@@ -496,6 +496,7 @@ function RecordingBlocks({ blocks, recording, codec, onConfigure, channels, serv
       {!recording&&<p className="text-[11px] text-gray-500">Gravação parada. Consulte os arquivos em Gravar → Busca e exportação.</p>}
       <RecordingProgress channels={channels} serverTime={serverTime} compact/>
       <SampleRecordingStatus/>
+      <p className="text-[10px] text-gray-500">Gravações executadas no servidor: continuam com o navegador fechado.</p>
     </div>
   );
 }
@@ -1307,6 +1308,12 @@ function BtsReportDialog({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function MonitorAoVivo() {
+  useEffect(()=>{
+    const confirmClose=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};
+    window.addEventListener('beforeunload',confirmClose);
+    return()=>window.removeEventListener('beforeunload',confirmClose);
+  },[]);
+
   const [, setLocation] = useLocation();
   const { sources, save: saveSources } = usePersistentSources();
   const [sourceIdx, setSourceIdx] = useState(()=>{
