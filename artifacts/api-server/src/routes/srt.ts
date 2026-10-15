@@ -1,3 +1,4 @@
+import {latestBtsDataForSource} from '../lib/bts-samples.ts';
 import { previewKey, previewCopyAllowed, rememberPreviewFormat } from '../lib/preview-format.ts';
 import { videoEncoder, encoderOptions, hardwareFailure } from '../lib/video-acceleration.ts';
 import { discoverNdi, startNdi, stopNdi } from "../lib/ndi";
@@ -24,6 +25,7 @@ interface StreamSession {
   readyData?: Record<string,unknown>;
   eit?: ReturnType<typeof createEitCollector>;
   eitOffset?: number;
+  eitSamplePath?: string;
   dir: string;
   process: ReturnType<typeof spawn>;
   createdAt: number;
@@ -479,8 +481,7 @@ function streamArgs(url: string, outputDir: string, programId?: number, captureM
     "-hls_segment_filename", join(outputDir, "segment_%05d.ts"),
     join(outputDir, "index.m3u8"),
     ...(recordingDirectory ? ["-map", videoMap, "-map", audioMap, "-map", "0:s?", "-c", "copy", "-f", "segment", "-segment_time", "600", "-reset_timestamps", "1", join(recordingDirectory, `${Date.now()}_%05d.ts`)] : []),
-    ...(captureMetadata ? ["-map", "0:i:278", "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass"),
-    "-map", "0:i:18", "-c", "copy", "-f", "data", "-flush_packets", "1", join(outputDir, "epg.bin")] : []),
+    ...(captureMetadata ? ["-map", "0:i:278", "-c:s", "ass", "-f", "ass", "-flush_packets", "1", join(outputDir, "captions.ass")] : []),
     '-map',audioMap,'-vn','-c:a','pcm_s16le','-ar','8000','-f','s16le','-flush_packets','1','pipe:1',
   ];
 }
@@ -797,6 +798,13 @@ router.get("/stream/:id/metadata", async (req, res): Promise<void> => {
     const length=Math.max(0,Math.min(info.size-offset,524288));
     if(length){const buffer=Buffer.alloc(length);const result=await epgFile.read(buffer,0,length,offset);session.eit.push(buffer.subarray(0,result.bytesRead));session.eitOffset=offset+result.bytesRead;}
   }finally{await epgFile.close();}
+  // EIT is a transport table, not necessarily a demuxed FFmpeg stream.
+  // Read it from the existing samples without blocking video or adding receivers.
+  const sample=latestBtsDataForSource(String(session.readyData?.url??''));
+  if(sample&&sample!==session.eitSamplePath){
+    const info=await stat(sample).catch(()=>null);
+    if(info&&info.size<=10000000){const data=await readFile(sample).catch(()=>null);if(data){for(let i=0;i+188<=data.length;i+=188){const p=data.subarray(i,i+188);if(p[0]!==71||(((p[1]&31)<<8)|p[2])!==18||!(p[3]&16))continue;let offset=4;if(p[3]&32)offset+=1+p[4];if(offset>=188)continue;if(p[1]&64){const pointer=p[offset++];if(pointer)session.eit.push(p.subarray(offset,offset+pointer));offset+=pointer;}if(offset<188)session.eit.push(p.subarray(offset));}session.eitSamplePath=sample;}}
+  }
   res.json({ ok: true, audio:session.audio&&Date.now()-session.audio.measuredAt<3000?session.audio:null,captionRevision, linhas: parseAssDialogue(captions, false).slice(-30), eventos: session.eit.result(), erro: session.lastError });
 });
 

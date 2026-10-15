@@ -49,3 +49,8 @@ export function configureBtsSamples(input:{enabled:boolean;directory:string}){
  while(busy)await new Promise(r=>setTimeout(r,10));busy=true;try{await stop();config={enabled:input.enabled,directory};error=null;retryAt=0;await save();}finally{busy=false;}await tick();return btsSamplesStatus();});configuring=task.then(()=>{},()=>{});return task;
 }
 export async function stopBtsSamples(){shutdown=true;if(timer)clearInterval(timer);while(busy)await new Promise(r=>setTimeout(r,10));await stop();await saving;}
+
+export function latestBtsDataForSource(url:string){
+ const normalize=(value:string)=>{const u=new URL(value);u.searchParams.delete('latency');return u.toString();};
+ try{const channel=status().channels[0];if(!channel||normalize(channel.url)!==normalize(url)||!lastSample||Date.now()-Date.parse(lastSample.end)>120000)return null;return (lastSample as BtsSample&{dataPath?:string}).dataPath??null;}catch{return null;}
+}
