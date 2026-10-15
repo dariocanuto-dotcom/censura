@@ -248,9 +248,10 @@ function ffprobe(url: string, timeoutMs: number): Promise<SrtProbeResult> {
     const t0 = Date.now();
     const args = [
       "-v", "quiet",
-      "-analyzeduration", "10000000",
-      "-probesize", "10000000",
+      "-analyzeduration", "3000000",
+      "-probesize", "5000000",
       "-print_format", "json",
+      "-show_programs",
       "-show_streams",
       "-show_format",
       "-timeout", String(timeoutMs * 1000), // microseconds
